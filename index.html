@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tangent</title>
+<meta name="description" content="Swipe through today's Wikipedia instead of doomscrolling: the news, what everyone is reading, on this day, and random rabbit holes.">
+<meta name="theme-color" content="#0b0a10">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tangent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preload" href="fonts/bricolage-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/literata-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preconnect" href="https://en.wikipedia.org">
+<link rel="preconnect" href="https://upload.wikimedia.org">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app" id="app" data-tab="home">
+
+  <!-- Home: full-screen swipe feed -->
+  <section class="screen home" id="screen-home" aria-label="Home">
+    <header class="home-top">
+      <nav class="tabs" id="tabs" aria-label="Feeds"></nav>
+    </header>
+    <div class="feed" id="home-feed" tabindex="-1"></div>
+  </section>
+
+  <!-- Explore: search, stories, grid -->
+  <section class="screen explore" id="screen-explore" aria-label="Explore" hidden>
+    <header class="pane-top">
+      <form class="searchbar" id="search-form" autocomplete="off" role="search">
+        <label class="search-field">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5 20 20"></path></svg>
+          <input id="search-input" type="search" maxlength="100" placeholder="Search Wikipedia" aria-label="Search Wikipedia" enterkeyhint="search">
+        </label>
+        <button class="cancel" id="search-cancel" type="button" hidden>Cancel</button>
+      </form>
+    </header>
+    <div class="pane-scroll" id="explore-scroll">
+      <div id="explore-home">
+        <div class="stories" id="stories" aria-label="Today's stories"></div>
+        <div class="grid" id="grid"></div>
+        <div class="grid-foot" id="grid-foot"></div>
+      </div>
+      <ul class="suggest" id="suggest" hidden></ul>
+      <div id="results" hidden>
+        <div class="results-head">
+          <span class="hash" aria-hidden="true">#</span>
+          <div class="results-text">
+            <h2 id="results-title"></h2>
+            <p>Articles on Wikipedia</p>
+          </div>
+          <button class="follow big" id="results-follow" type="button">Follow</button>
+        </div>
+        <div class="grid" id="rgrid"></div>
+        <div class="grid-foot" id="rgrid-foot"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- You: profile -->
+  <section class="screen you" id="screen-you" aria-label="You" hidden>
+    <div class="pane-scroll" id="you-scroll">
+      <div class="profile">
+        <div class="p-row">
+          <span class="p-ava" aria-hidden="true">
+            <span class="in">
+              <svg width="44" height="44" viewBox="0 0 28 28"><circle cx="13" cy="15" r="8" fill="none" stroke="currentColor" stroke-width="2.4"></circle><path d="M1 9 L25 4.75" stroke="var(--accent)" stroke-width="2.4" stroke-linecap="round"></path><circle cx="11.6" cy="7.1" r="2.5" fill="var(--accent)"></circle></svg>
+            </span>
+          </span>
+          <div class="stats">
+            <div><b id="stat-read">0</b><span>read</span></div>
+            <div><b id="stat-streak">0</b><span>day streak</span></div>
+            <div><b id="stat-topics">0</b><span>following</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="p-name">Tangent</div>
+          <p class="p-bio" id="p-bio"></p>
+        </div>
+        <div class="p-actions">
+          <button class="pbtn" id="you-install" type="button">Install app</button>
+          <button class="pbtn" id="you-explore" type="button">Find topics</button>
+        </div>
+        <div class="following" id="following"></div>
+      </div>
+      <div class="gtabs" role="tablist">
+        <button class="gtab" id="gtab-saved" role="tab" aria-selected="true" type="button" aria-label="Saved">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
+        </button>
+        <button class="gtab" id="gtab-liked" role="tab" aria-selected="false" type="button" aria-label="Liked">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 20.5s-7.2-4.4-9.3-8.9C1.3 8.4 3.3 4.8 6.9 4.8c2.2 0 3.7 1.2 5.1 3.1 1.4-1.9 2.9-3.1 5.1-3.1 3.6 0 5.6 3.6 4.2 6.8-2.1 4.5-9.3 8.9-9.3 8.9z"></path></svg>
+        </button>
+      </div>
+      <div class="grid" id="ygrid"></div>
+      <p class="grid-empty" id="ygrid-empty" hidden></p>
+      <p class="about">Articles come live from Wikipedia under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>. Tangent is free, has no ads or account, isn't made by Wikipedia, and keeps your likes and saves on this phone only.</p>
+    </div>
+  </section>
+
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Main">
+    <button class="nav-btn" data-tab="home" type="button" aria-label="Home" aria-current="page">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path class="fillable" d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"></path></svg>
+    </button>
+    <button class="nav-btn" data-tab="explore" type="button" aria-label="Explore">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="thick" cx="10.5" cy="10.5" r="6.5"></circle><path class="thick" d="M15.5 15.5 20.5 20.5"></path></svg>
+    </button>
+    <button class="nav-btn" data-tab="you" type="button" aria-label="You">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="fillable" cx="12" cy="8.5" r="3.8"></circle><path class="fillable" d="M4.5 20.5c1.2-3.6 4-5.5 7.5-5.5s6.3 1.9 7.5 5.5z"></path></svg>
+    </button>
+  </nav>
+</div>
+
+<!-- Post viewer (opened from grids, search, saved) -->
+<div class="viewer" id="viewer" hidden>
+  <header class="viewer-top">
+    <button class="back" id="viewer-back" type="button" aria-label="Back">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
+    </button>
+    <span class="viewer-title" id="viewer-title"></span>
+  </header>
+  <div class="feed" id="viewer-feed" tabindex="-1"></div>
+</div>
+
+<!-- Stories -->
+<div class="story" id="story" hidden>
+  <div class="st-stage" id="st-stage"></div>
+  <div class="st-bars" id="st-bars"></div>
+  <div class="st-head">
+    <span class="st-ava" id="st-ava"></span>
+    <b id="st-name"></b>
+    <span class="st-when" id="st-when"></span>
+    <button class="st-x" id="st-close" type="button" aria-label="Close story">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+    </button>
+  </div>
+  <div class="st-foot">
+    <a class="readpill" id="st-read" href="#" target="_blank" rel="noopener">Read article
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+    </a>
+    <button class="rb like st-like" id="st-like" type="button" aria-label="Like" aria-pressed="false"></button>
+    <button class="rb" id="st-share" type="button" aria-label="Share"></button>
+  </div>
+</div>
+
+<!-- Install sheet -->
+<div class="scrim" id="install-sheet" hidden>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="install-title">
+    <div class="sheet-head">
+      <h2 id="install-title">Put Tangent on your home screen</h2>
+      <button class="x" type="button" data-close aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <div class="install-body" id="install-body"></div>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<noscript><p style="padding: 24px; color: #fff;">Tangent needs JavaScript to load articles.</p></noscript>
+<script src="app.js" defer></script>
+</body>
+</html>
