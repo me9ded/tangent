@@ -65,6 +65,38 @@
     </div>
   </section>
 
+  <!-- Learn: lessons, review, daily quiz -->
+  <section class="screen learn" id="screen-learn" aria-label="Learn" hidden>
+    <div class="pane-scroll" id="learn-scroll">
+      <header class="learn-head">
+        <h1>Learn</h1>
+        <p id="learn-sub">Short visual lessons, built from Wikipedia.</p>
+      </header>
+      <div class="today-row">
+        <button class="daily" id="btn-review" type="button" style="--h: 150">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7"></path><path d="M4 4v4.5h4.5"></path></svg>
+          <b>Review</b>
+          <span id="rev-sub">Like or save cards to start</span>
+        </button>
+        <button class="daily" id="btn-quiz" type="button" style="--h: 55">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8"></path><circle cx="12" cy="17.2" r=".9" fill="currentColor"></circle></svg>
+          <b>Daily quiz</b>
+          <span id="quiz-sub">5 questions from today</span>
+        </button>
+      </div>
+      <section id="continue-sec" class="shelf-sec" hidden>
+        <h2 class="shelf-title">Continue</h2>
+        <div class="shelf" id="continue-shelf"></div>
+      </section>
+      <section class="shelf-sec">
+        <h2 class="shelf-title">Today's lesson</h2>
+        <div class="hero-wrap" id="today-lesson"></div>
+      </section>
+      <div id="collections"></div>
+      <p class="about">Lessons are built live from the full Wikipedia article: its sections become cards, its own pictures illustrate them, and the quiz questions come straight from the text.</p>
+    </div>
+  </section>
+
   <!-- You: profile -->
   <section class="screen you" id="screen-you" aria-label="You" hidden>
     <div class="pane-scroll" id="you-scroll">
@@ -77,8 +109,8 @@
           </span>
           <div class="stats">
             <div><b id="stat-read">0</b><span>read</span></div>
+            <div><b id="stat-lessons">0</b><span>lessons</span></div>
             <div><b id="stat-streak">0</b><span>day streak</span></div>
-            <div><b id="stat-topics">0</b><span>following</span></div>
           </div>
         </div>
         <div>
@@ -98,6 +130,9 @@
         <button class="gtab" id="gtab-liked" role="tab" aria-selected="false" type="button" aria-label="Liked">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 20.5s-7.2-4.4-9.3-8.9C1.3 8.4 3.3 4.8 6.9 4.8c2.2 0 3.7 1.2 5.1 3.1 1.4-1.9 2.9-3.1 5.1-3.1 3.6 0 5.6 3.6 4.2 6.8-2.1 4.5-9.3 8.9-9.3 8.9z"></path></svg>
         </button>
+        <button class="gtab" id="gtab-lessons" role="tab" aria-selected="false" type="button" aria-label="Finished lessons">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
+        </button>
       </div>
       <div class="grid" id="ygrid"></div>
       <p class="grid-empty" id="ygrid-empty" hidden></p>
@@ -111,6 +146,10 @@
     </button>
     <button class="nav-btn" data-tab="explore" type="button" aria-label="Explore">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="thick" cx="10.5" cy="10.5" r="6.5"></circle><path class="thick" d="M15.5 15.5 20.5 20.5"></path></svg>
+    </button>
+    <button class="nav-btn" data-tab="learn" type="button" aria-label="Learn">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="fillable" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
+      <span class="nav-badge" id="learn-badge" hidden>0</span>
     </button>
     <button class="nav-btn" data-tab="you" type="button" aria-label="You">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="fillable" cx="12" cy="8.5" r="3.8"></circle><path class="fillable" d="M4.5 20.5c1.2-3.6 4-5.5 7.5-5.5s6.3 1.9 7.5 5.5z"></path></svg>
@@ -142,12 +181,30 @@
     </button>
   </div>
   <div class="st-foot">
-    <a class="readpill" id="st-read" href="#" target="_blank" rel="noopener">Read article
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+    <button class="readpill primary" id="st-learn" type="button"><span>Learn this</span></button>
+    <a class="readpill icon" id="st-read" href="#" target="_blank" rel="noopener" aria-label="Read on Wikipedia">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
     </a>
     <button class="rb like st-like" id="st-like" type="button" aria-label="Like" aria-pressed="false"></button>
     <button class="rb" id="st-share" type="button" aria-label="Share"></button>
   </div>
+</div>
+
+<!-- Lesson reader -->
+<div class="lesson" id="lesson" hidden>
+  <div class="ls-top">
+    <div class="ls-bars" id="ls-bars"></div>
+    <div class="ls-row">
+      <span class="ls-badge" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
+      </span>
+      <span class="ls-title" id="ls-title"></span>
+      <button class="ls-x" id="ls-close" type="button" aria-label="Close lesson">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+  </div>
+  <div class="ls-stage" id="ls-stage"></div>
 </div>
 
 <!-- Install sheet -->
