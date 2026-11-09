@@ -18,10 +18,15 @@
     topic:    { label: "Topic",              h: 335 },
     related:  { label: "Related",            h: 335 },
     quiz:     { label: "Quick quiz",         h: 55 },
-    lesson:   { label: "Lesson",             h: 265 }
+    lesson:   { label: "Lesson",             h: 265 },
+    mnews:    { label: "Market news",        h: 160 },
+    movers:   { label: "Your watchlist",     h: 160 },
+    earnings: { label: "Earnings",           h: 95 },
+    connect:  { label: "Stocks",             h: 160 }
   };
   const MODES = [
     { id: "foryou", name: "For you" },
+    { id: "stocks", name: "Stocks" },
     { id: "news", name: "News" },
     { id: "trend", name: "Trending" },
     { id: "otd", name: "On this day" },
@@ -316,7 +321,7 @@
       offset = r.next;
     }
   }
-  const likedGens = () => [...liked.values()].slice(-6).reverse().map((x) => searchGen("morelike:" + x.title, "related", x.title, "liked"));
+  const likedGens = () => [...liked.values()].filter((x) => !MARKET_KINDS.has(x.kind)).slice(-6).reverse().map((x) => searchGen("morelike:" + x.title, "related", x.title, "liked"));
   const topicGens = () => topics.map((q) => searchGen(q, "topic", q));
 
   /* ======================= quizzes ======================= */
@@ -431,7 +436,8 @@
       () => (a < otd.length ? (q => q && quizItem(q))(otdYear(otd[a++])) : null),
       () => (b < trImg.length ? (q => q && quizItem(q))(picMatch(trImg[b++], poolArr())) : null),
       () => (q => q && quizItem(q))(trendTop(tr)),
-      () => (c < trDesc.length ? (q => q && quizItem(q))(descMatch(trDesc[c++], poolArr())) : null)
+      () => (c < trDesc.length ? (q => q && quizItem(q))(descMatch(trDesc[c++], poolArr())) : null),
+      () => marketQuiz()
     ];
     for (let i = 0; made < 40 && fails < 20; i++) {
       const q = makers[i % makers.length]();
@@ -442,7 +448,7 @@
   /* ======================= review schedule ======================= */
   function saveReviews() { store.set("reviews", reviews); }
   function scheduleReview(it) {
-    if (!it || !it.key || it.kind === "picture" || it.kind === "quiz" || reviews[it.key]) return;
+    if (!it || !it.key || it.kind === "picture" || it.kind === "quiz" || MARKET_KINDS.has(it.kind) || reviews[it.key]) return;
     if (!it.text && !it.desc && !it.img) return;
     reviews[it.key] = { item: slim(it), box: 0, due: dayPlus(REVIEW_DAYS[0]) };
     saveReviews();
@@ -464,14 +470,490 @@
     store.set("qstats", qstats);
   }
 
+  /* ======================= stocks: Finnhub data layer ======================= */
+  const FH = "https://finnhub.io/api/v1";
+  const MARKET_KINDS = new Set(["mnews", "movers", "earnings", "connect"]);
+  const DEFAULT_WATCH = [
+    ["AAPL", "Apple", "Apple Inc."], ["MSFT", "Microsoft", "Microsoft"], ["GOOGL", "Alphabet", "Alphabet Inc."], ["AMZN", "Amazon", "Amazon (company)"], ["META", "Meta Platforms", "Meta Platforms"],
+    ["NVDA", "Nvidia", "Nvidia"], ["AMD", "AMD", "AMD"], ["AVGO", "Broadcom", "Broadcom"], ["TSM", "TSMC", "TSMC"], ["ASML", "ASML", "ASML Holding"], ["INTC", "Intel", "Intel"],
+    ["SHOP", "Shopify", "Shopify"], ["CLS", "Celestica", "Celestica"], ["OTEX", "OpenText", "OpenText"],
+    ["TSLA", "Tesla", "Tesla, Inc."], ["NFLX", "Netflix", "Netflix"], ["PLTR", "Palantir", "Palantir Technologies"]
+  ].map(([sym, name, wiki]) => ({ sym, name, wiki }));
+  const storedWatch = store.get("watch", null);
+  let watch = (Array.isArray(storedWatch) ? storedWatch : DEFAULT_WATCH).filter((w) => w && typeof w.sym === "string" && typeof w.name === "string").slice(0, 40);
+  const saveWatch = () => store.set("watch", watch);
+  const getKey = () => { const k = store.get("fhkey", ""); return typeof k === "string" ? k.trim() : ""; };
+  const watchOf = (sym) => watch.find((w) => w.sym === sym) || null;
+
+  function fhError(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
+  const fhMem = new Map();
+  const fhDisk = asObj(store.get("fhcache", {}));
+  function fhGet(k, ttl) {
+    const m = fhMem.get(k) || fhDisk[k];
+    return m && Date.now() - m.t < ttl ? m.v : undefined;
+  }
+  function fhPut(k, v, persist) {
+    const e = { t: Date.now(), v };
+    fhMem.set(k, e);
+    if (persist) {
+      fhDisk[k] = e;
+      const keys = Object.keys(fhDisk);
+      if (keys.length > 120) keys.sort((a, b) => fhDisk[a].t - fhDisk[b].t).slice(0, keys.length - 120).forEach((x) => delete fhDisk[x]);
+      store.set("fhcache", fhDisk);
+    }
+  }
+  /* Finnhub's free plan allows 60 calls a minute. Stay under 50, space calls out,
+     and keep 16 of them for things you tapped so background loading never makes you wait. */
+  const fhQ = { times: [], chain: Promise.resolve(), pausedUntil: 0 };
+  async function fhSlot(high) {
+    const cap = high ? 50 : 34;
+    for (;;) {
+      const now = Date.now();
+      if (now < fhQ.pausedUntil) { await sleep(fhQ.pausedUntil - now); continue; }
+      fhQ.times = fhQ.times.filter((t) => now - t < 60000);
+      if (fhQ.times.length < cap) {
+        const last = fhQ.times[fhQ.times.length - 1] || 0;
+        if (now - last < 110) { await sleep(110 - (now - last)); continue; }
+        fhQ.times.push(now);
+        return;
+      }
+      await sleep(Math.max(80, 60000 - (now - fhQ.times[fhQ.times.length - cap]) + 60));
+    }
+  }
+  const fhInflight = new Map();
+  function fh(path, params, opts) {
+    opts = opts || {};
+    if (!opts.ttl) return fhCall(path, params, opts);
+    const ck = path + "?" + new URLSearchParams(params || {}).toString();
+    const hit = fhGet(ck, opts.ttl);
+    if (hit !== undefined) return Promise.resolve(hit);
+    if (fhInflight.has(ck)) return fhInflight.get(ck);
+    const p = fhCall(path, params, opts);
+    fhInflight.set(ck, p);
+    p.catch(() => {}).finally(() => { if (fhInflight.get(ck) === p) fhInflight.delete(ck); });
+    return p;
+  }
+  async function fhCall(path, params, opts) {
+    const key = opts.key || getKey();
+    if (!key) throw fhError("nokey");
+    if (opts.sig && opts.sig.dead) throw fhError("aborted");
+    const qs = new URLSearchParams(params || {});
+    const ck = path + "?" + qs.toString();
+    if (opts.ttl) { const hit = fhGet(ck, opts.ttl); if (hit !== undefined) return hit; }
+    if (opts.high) await fhSlot(true);
+    else {
+      const slot = fhQ.chain.then(() => (opts.sig && opts.sig.dead ? null : fhSlot(false)));
+      fhQ.chain = slot.catch(() => {});
+      await slot;
+      if (opts.sig && opts.sig.dead) throw fhError("aborted");
+    }
+    qs.set("token", key);
+    let r;
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 12000);
+    try { r = await fetch(FH + path + "?" + qs.toString(), { signal: ctl.signal }); }
+    catch (e) { fhQ.netErrors = (fhQ.netErrors || 0) + 1; throw fhError("net"); }
+    finally { clearTimeout(t); }
+    if (r.status === 401) throw fhError("badkey");
+    if (r.status === 403) throw fhError("noaccess");
+    if (r.status === 429) { fhQ.pausedUntil = Date.now() + 15000; throw fhError("rate"); }
+    if (!r.ok) throw fhError("http", "HTTP " + r.status);
+    const j = await r.json();
+    if (j && typeof j === "object" && !Array.isArray(j) && typeof j.error === "string") throw fhError(/key/i.test(j.error) ? "badkey" : "noaccess", j.error);
+    if (opts.ttl) fhPut(ck, j, opts.persist);
+    return j;
+  }
+
+  /* quotes */
+  const quotes = new Map(Object.entries(asObj(store.get("lastQuotes", {}))).filter(([, q]) => q && Number.isFinite(q.c) && q.c > 0));
+  let quotesAt = Number(store.get("lastQuotesAt", 0)) || 0;
+  let quoteJob = null;
+  let keyBroken = false;
+  function refreshQuotes(force, high) {
+    if (!getKey()) return Promise.resolve(quotes);
+    if (!force && quotes.size && Date.now() - quotesAt < 55000) return Promise.resolve(quotes);
+    if (quoteJob) return quoteJob;
+    quoteJob = (async () => {
+      const res = await Promise.allSettled(watch.map((w) => fh("/quote", { symbol: w.sym }, { high: true }).then((q) => [w.sym, q])));
+      let ok = 0, bad = false, lastErr = null;
+      for (const r of res) {
+        if (r.status === "fulfilled") { const [s, q] = r.value; if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, q); ok++; } }
+        else { lastErr = r.reason; if (r.reason && r.reason.code === "badkey") bad = true; }
+      }
+      keyBroken = bad && !ok;
+      if (!ok && lastErr) throw lastErr;
+      quotesAt = Date.now();
+      store.set("lastQuotes", Object.fromEntries([...quotes].filter(([s]) => watchOf(s))));
+      store.set("lastQuotesAt", quotesAt);
+      updatePills();
+      return quotes;
+    })().finally(() => { quoteJob = null; });
+    return quoteJob;
+  }
+  const dpOf = (sym) => { const q = quotes.get(sym); return q && Number.isFinite(q.dp) ? q.dp : null; };
+
+  /* market status */
+  function nyClock() {
+    const parts = {};
+    for (const p of new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(new Date())) parts[p.type] = p.value;
+    return { wd: parts.weekday, min: (Number(parts.hour) % 24) * 60 + Number(parts.minute) };
+  }
+  function clockStatus() {
+    const { wd, min } = nyClock();
+    if (wd === "Sat" || wd === "Sun") return { open: false, session: null };
+    if (min >= 570 && min < 960) return { open: true, session: "regular" };
+    if (min >= 240 && min < 570) return { open: false, session: "pre-market" };
+    if (min >= 960 && min < 1200) return { open: false, session: "post-market" };
+    return { open: false, session: null };
+  }
+  let mstatus = clockStatus();
+  async function marketStatus() {
+    try {
+      const j = await fh("/stock/market-status", { exchange: "US" }, { ttl: 60000, high: true });
+      if (j && typeof j.isOpen === "boolean") mstatus = { open: j.isOpen, session: j.session || (j.isOpen ? "regular" : null), holiday: j.holiday || null };
+      else mstatus = clockStatus();
+    } catch (e) { mstatus = clockStatus(); }
+    return mstatus;
+  }
+  function statusLabel(s) {
+    s = s || mstatus;
+    if (s.session === "regular" || s.open) return "Market open";
+    if (s.session === "pre-market") return "Pre-market";
+    if (s.session === "post-market") return "After hours";
+    return s.holiday ? "Closed for " + s.holiday : "Market closed";
+  }
+
+  /* company data */
+  function profile(sym, high) { return fh("/stock/profile2", { symbol: sym }, { ttl: 7 * 864e5, persist: true, high }); }
+  function cachedProfile(sym) { return fhGet("/stock/profile2?" + new URLSearchParams({ symbol: sym }).toString(), 7 * 864e5); }
+  async function companyNews(sym, high, sig) {
+    const j = await fh("/company-news", { symbol: sym, from: dayPlus(-4), to: dayPlus(0) }, { ttl: 20 * 60000, high, sig });
+    return asArr(j).filter((n) => n && n.headline && n.url).sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 14).map((n) => newsItem(n, sym));
+  }
+  function newsItem(n, sym) {
+    const w = watchOf(sym);
+    return {
+      key: "fn:" + (n.id || n.url), kind: "mnews", title: String(n.headline).trim(), hook: String(n.headline).trim(), desc: "",
+      text: String(n.summary || "").trim(), img: n.image ? { src: n.image } : null, url: n.url,
+      meta: { sym, source: n.source || "", time: n.datetime ? n.datetime * 1000 : 0, company: w ? w.name : sym, wiki: w ? w.wiki : null }
+    };
+  }
+  let earnJob = null;
+  async function earningsSoon(high, sig) {
+    const ck = "earnSoon:" + watch.map((w) => w.sym).join(",");
+    const hit = fhGet(ck, 6 * 3600e3);
+    if (hit) return hit;
+    if (earnJob && earnJob.ck === ck) return earnJob.p;
+    const p = earningsFetch(ck, high, sig);
+    earnJob = { ck, p };
+    p.catch(() => {}).finally(() => { if (earnJob && earnJob.p === p) earnJob = null; });
+    return p;
+  }
+  async function earningsFetch(ck, high, sig) {
+    const j = await fh("/calendar/earnings", { from: dayPlus(0), to: dayPlus(21) }, { high, sig });
+    const syms = new Set(watch.map((w) => w.sym));
+    const list = asArr(j && j.earningsCalendar).filter((e) => e && syms.has(e.symbol) && e.date).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    fhPut(ck, list, true);
+    return list;
+  }
+  async function metrics(sym) { const j = await fh("/stock/metric", { symbol: sym, metric: "all" }, { ttl: 12 * 3600e3, high: true }); return asObj(j && j.metric); }
+  async function symbolSearch(q) {
+    const j = await fh("/search", { q }, { ttl: 3600e3, high: true });
+    return asArr(j && j.result).filter((r) => r && r.symbol && !/[.:]/.test(r.symbol) && (!r.type || /common stock|adr|etp|etf|reit/i.test(r.type))).slice(0, 12);
+  }
+  async function wikiFor(w) {
+    if (w.wiki) return w.wiki;
+    const r = await searchBatch(w.name + " company", 0, 3);
+    const p = r.pages[0];
+    if (!p) return null;
+    w.wiki = p.title;
+    saveWatch();
+    return w.wiki;
+  }
+  function cleanName(s) {
+    s = String(s || "").replace(/\b(inc|corp|corporation|ltd|limited|plc|co|holdings?|group|class [a-c]|cl [a-c]|sa|nv|ag|adr|spons?|sponsored|ord|shs|common stock)\b\.?/gi, "").replace(/[-,/]+\s*$/, "").replace(/\s+/g, " ").trim();
+    return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) || s;
+  }
+  /* Wikipedia seed for a market card: the company, not the headline. */
+  function lessonSeed(it) {
+    if (it && it.meta && it.meta.sym) {
+      const w = watchOf(it.meta.sym);
+      const title = (w && w.wiki) || it.meta.wiki || (w && w.name) || it.meta.company;
+      if (title) return { key: title, title, kind: "lesson", desc: "", img: null, meta: {} };
+    }
+    return it;
+  }
+
+  /* formatting */
+  const usd = (v) => (Number.isFinite(v) ? "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "–");
+  const pct = (v) => (Number.isFinite(v) ? (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2) + "%" : "–");
+  const bigUsd = (v) => (Number.isFinite(v) && v > 0 ? "$" + new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(v) : "–");
+  const ago = (ms) => { const s = Math.max(0, (Date.now() - ms) / 1000); return s < 3600 ? Math.max(1, Math.round(s / 60)) + "m ago" : s < 86400 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago"; };
+  const clock = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  function chgPill(sym, big) {
+    const s = el("span", "chg" + (big ? " big" : ""));
+    s.dataset.sym = sym;
+    paintPill(s);
+    return s;
+  }
+  function paintPill(s) {
+    const q = quotes.get(s.dataset.sym);
+    const v = q && Number.isFinite(q.dp) ? q.dp : null;
+    s.classList.toggle("up", v > 0);
+    s.classList.toggle("down", v < 0);
+    s.textContent = v == null ? "–" : (v > 0 ? "▲ " : v < 0 ? "▼ " : "") + Math.abs(v).toFixed(2) + "%";
+    s.title = q ? usd(q.c) : "";
+    s.hidden = v == null && !getKey();
+  }
+  function updatePills() {
+    document.querySelectorAll(".chg[data-sym]").forEach(paintPill);
+    document.querySelectorAll("[data-px]").forEach((n) => { const q = quotes.get(n.dataset.px); if (q) n.textContent = usd(q.c); });
+  }
+  function initials(name) { return String(name || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]).join("").toUpperCase() || "?"; }
+  /* Puts the company logo into a slot once Finnhub's profile is known; shows initials until then. */
+  function logoInto(slot, sym) {
+    slot.dataset.logo = sym;
+    const w = watchOf(sym);
+    const p = cachedProfile(sym);
+    const set = (url) => {
+      if (!url) return;
+      const im = new Image();
+      im.alt = "";
+      im.onload = () => { slot.textContent = ""; slot.classList.add("has-logo"); slot.append(im); };
+      im.src = url;
+    };
+    slot.textContent = initials(w ? w.name : sym);
+    if (p && p.logo) set(p.logo);
+    else warmProfiles();
+  }
+  function paintLogos(sym) { document.querySelectorAll('[data-logo="' + esc(sym) + '"]').forEach((s) => { if (!s.classList.contains("has-logo")) logoInto(s, sym); }); }
+  let warmTimer = null;
+  function warmProfiles() {
+    if (warmTimer || !getKey()) return;
+    const todo = [...new Set(watch.map((w) => w.sym).concat([...document.querySelectorAll("[data-logo]")].map((x) => x.dataset.logo)))].filter((s) => !cachedProfile(s));
+    if (!todo.length) return;
+    warmTimer = setTimeout(async () => {
+      for (const s of todo) {
+        if (!getKey()) break;
+        while (fhQ.times.filter((t) => Date.now() - t < 60000).length > 14) await sleep(2500);
+        if (cachedProfile(s)) continue;
+        try { await profile(s); paintLogos(s); } catch (e) { if (e.code === "badkey") break; }
+        await sleep(900);
+      }
+      warmTimer = null;
+    }, 4000);
+  }
+
+  /* charts */
+  function rangeBar(lo, hi, cur, marks, big) {
+    const box = el("div", "rng" + (big ? " big" : ""));
+    if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo && Number.isFinite(cur))) { box.classList.add("empty"); return box; }
+    const at = (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+    const track = el("div", "rng-track");
+    for (const m of marks || []) {
+      if (!Number.isFinite(m.v)) continue;
+      const t = el("i", "rng-mark");
+      t.style.left = at(m.v) + "%";
+      t.title = m.label + " " + usd(m.v);
+      track.append(t);
+    }
+    const dot = el("b", "rng-dot");
+    dot.style.left = at(cur) + "%";
+    track.append(dot);
+    box.append(track);
+    if (big) {
+      const lab = el("div", "rng-labels");
+      lab.append(el("span", null, usd(lo)), el("span", null, usd(hi)));
+      box.append(lab);
+    }
+    box.setAttribute("aria-label", "Range " + usd(lo) + " to " + usd(hi) + ", now " + usd(cur));
+    return box;
+  }
+  function moversChart(rows, onTap) {
+    const box = el("div", "mv");
+    const max = Math.max(0.5, ...rows.map((r) => Math.abs(r.dp)));
+    for (const r of rows) {
+      const b = el("button", "mv-row " + (r.dp > 0 ? "up" : r.dp < 0 ? "down" : "flat"));
+      b.type = "button";
+      const bar = el("span", "mv-bar");
+      const fill = el("i");
+      fill.style.width = (Math.abs(r.dp) / max) * 50 + "%";
+      bar.append(fill);
+      b.append(el("span", "mv-sym", r.sym), bar, el("span", "mv-val", pct(r.dp)));
+      b.setAttribute("aria-label", r.name + " " + pct(r.dp));
+      b.addEventListener("click", (e) => { e.stopPropagation(); if (onTap) onTap(r.sym); });
+      box.append(b);
+    }
+    return box;
+  }
+  function moverRows() {
+    return watch.map((w) => ({ sym: w.sym, name: w.name, dp: dpOf(w.sym), c: (quotes.get(w.sym) || {}).c })).filter((r) => r.dp != null).sort((a, b) => b.dp - a.dp);
+  }
+
+  /* market cards for the feed */
+  function moversItem() {
+    const rows = moverRows();
+    if (rows.length < 2) return null;
+    const up = rows.filter((r) => r.dp > 0).length;
+    const best = rows[0], worst = rows[rows.length - 1];
+    const hook = best.dp > 0
+      ? best.name + " leads your watchlist, " + pct(best.dp)
+      : "A red day: every stock on your list is down or flat";
+    const text = up + " of " + rows.length + " up" + (worst.dp < 0 ? " · " + worst.name + " is the weakest at " + pct(worst.dp) : "") + ".";
+    return { key: "movers:" + todayKey() + ":" + Math.floor(Date.now() / 900000), kind: "movers", title: "Your watchlist", hook, text, meta: { rows, at: quotesAt } };
+  }
+  function dayWord(date) {
+    const t = todayKey();
+    if (date === t) return "today";
+    if (date === dayPlus(1)) return "tomorrow";
+    const d = new Date(date + "T12:00:00");
+    return "on " + d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  }
+  const HOUR = { bmo: " before the market opens", amc: " after the market closes", dmh: " during market hours" };
+  function earningsItem(e) {
+    const w = watchOf(e.symbol) || { name: e.symbol, wiki: null };
+    const bits = [];
+    if (e.quarter && e.year) bits.push("Q" + e.quarter + " " + e.year + ".");
+    const est = [];
+    if (Number.isFinite(e.epsEstimate)) est.push("earnings per share of " + usd(e.epsEstimate));
+    if (Number.isFinite(e.revenueEstimate) && e.revenueEstimate > 0) est.push("revenue of " + bigUsd(e.revenueEstimate));
+    if (est.length) bits.push("Analysts expect " + est.join(" and ") + ".");
+    return { key: "earn:" + e.symbol + ":" + e.date, kind: "earnings", title: w.name, hook: w.name + " reports earnings " + dayWord(e.date) + (HOUR[e.hour] || ""), text: bits.join(" "), url: "", meta: { sym: e.symbol, date: e.date, wiki: w.wiki, company: w.name } };
+  }
+  function connectItem(broken) {
+    return {
+      key: "connect:" + (broken ? "bad" : "new") + ":" + todayKey(), kind: "connect", title: "Stocks",
+      hook: broken ? "Your Finnhub key stopped working" : "Turn this feed into your tech-stock tracker",
+      text: broken ? "Finnhub rejected the saved key. Paste a fresh one in the Stocks tab and prices and news come back." : "Add a free Finnhub key and you'll get live prices, news and earnings dates for Nvidia, Apple, Shopify and the rest of your watchlist, right here between the lessons.",
+      meta: {}
+    };
+  }
+  function marketQuiz() {
+    const rows = moverRows();
+    const makers = shuffle([
+      () => {
+        if (rows.length < 4) return null;
+        for (let t = 0; t < 5; t++) {
+          const pick = shuffle(rows).slice(0, 4);
+          const max = Math.max(...pick.map((r) => r.dp));
+          if (pick.filter((r) => r.dp === max).length !== 1) continue;
+          const best = pick.find((r) => r.dp === max);
+          const w = watchOf(best.sym) || {};
+          return { type: "choice", kicker: "Your stocks", prompt: max > 0 ? "Which of these is up the most today?" : "Which of these is holding up best today?", options: pick.map((r) => r.name + " (" + r.sym + ")"), answer: pick.indexOf(best), explain: best.name + " is " + pct(best.dp) + " today at " + usd(best.c) + ".", subject: w.wiki ? { key: w.wiki, title: w.wiki, kind: "lesson", meta: {} } : null };
+        }
+        return null;
+      },
+      () => {
+        const ws = shuffle(watch).slice(0, 4);
+        if (ws.length < 4) return null;
+        const w = ws[0];
+        const opts = shuffle(ws);
+        return { type: "choice", kicker: "Tickers", prompt: "Which company trades under the ticker " + w.sym + "?", options: opts.map((x) => x.name), answer: opts.indexOf(w), explain: w.sym + " is " + w.name + ".", subject: w.wiki ? { key: w.wiki, title: w.wiki, kind: "lesson", meta: {} } : null };
+      }
+    ]);
+    for (const m of makers) { const q = m(); if (q) return quizItem(q); }
+    return null;
+  }
+
+  /* Feeds hand their generators a signal; once a feed restarts, its old generators stop calling Finnhub. */
+  let genSig = { dead: false };
+  function marketGen() { return marketGenImpl(genSig); }
+  async function* marketGenImpl(sig) {
+    if (!getKey()) { yield connectItem(false); return; }
+    try { await refreshQuotes(); }
+    catch (e) { if (e.code === "badkey") { yield connectItem(true); return; } }
+    warmProfiles();
+    const mv = moversItem();
+    if (mv) yield mv;
+    try { for (const e of (await earningsSoon(false, sig)).slice(0, 3)) yield earningsItem(e); } catch (e) { if (sig.dead) return; /* earnings are a bonus */ }
+    const order = watch.slice().sort((a, b) => Math.abs(dpOf(b.sym) || 0) - Math.abs(dpOf(a.sym) || 0));
+    const buckets = new Map();
+    const heads = new Set();
+    let fails = 0, sinceQuiz = 0;
+    for (let pass = 0; pass < 5; pass++) {
+      let any = false;
+      for (const w of order) {
+        let items = buckets.get(w.sym);
+        if (!items) {
+          try { items = await companyNews(w.sym, false, sig); fails = 0; }
+          catch (e) { items = []; if (sig.dead || e.code === "badkey" || ++fails >= 5) return; }
+          buckets.set(w.sym, items);
+        }
+        let n = 0;
+        while (items.length && n < (pass === 0 ? 1 : 2)) {
+          const it = items.shift();
+          const h = it.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 70);
+          if (heads.has(h)) continue;
+          heads.add(h);
+          n++;
+          any = true;
+          yield it;
+          if (++sinceQuiz >= 6) { sinceQuiz = 0; const q = marketQuiz(); if (q) yield q; }
+        }
+      }
+      if (!any && pass > 0) return;
+    }
+  }
+  /* Wikipedia articles about the companies you watch, then articles like them. */
+  async function* techWikiGen() {
+    const ws = shuffle(watch.filter((w) => w.wiki));
+    for (let i = 0; i < ws.length; i += 10) {
+      const chunk = ws.slice(i, i + 10);
+      const j = await getJSON(actionUrl(Object.assign({ titles: chunk.map((w) => w.wiki).join("|"), redirects: 1 }, PAGE)));
+      const q = j.query || {};
+      const back = new Map();
+      for (const w of chunk) {
+        let t = w.wiki;
+        for (const n of q.normalized || []) if (n.from === t) t = n.to;
+        for (const r of q.redirects || []) if (r.from === t) t = r.to;
+        back.set(t, w);
+      }
+      for (const p of shuffle(q.pages || [])) {
+        const it = fromAction(p, "topic");
+        const w = back.get(p.title);
+        if (it && w && solid(it, 100)) { it.meta = { label: w.name, sym: w.sym }; addPool(it); yield it; }
+      }
+    }
+    const gens = ws.slice(0, 8).map((w) => ({ w, g: searchGen("morelike:" + w.wiki, "related", w.name, "watch") }));
+    while (gens.length) {
+      for (const x of gens.slice()) {
+        let r;
+        try { r = await x.g.next(); } catch (e) { gens.splice(gens.indexOf(x), 1); continue; }
+        if (r.done) { gens.splice(gens.indexOf(x), 1); continue; }
+        r.value.meta = Object.assign({}, r.value.meta, { sym: x.w.sym });
+        yield r.value;
+      }
+    }
+  }
+  async function* marketQuizGen() {
+    for (let i = 0; i < 30; i++) {
+      if (getKey()) { try { await refreshQuotes(); } catch (e) { return; } }
+      const q = marketQuiz();
+      if (!q) return;
+      yield q;
+    }
+  }
+  function stocksFeedGen() {
+    return mix(
+      { market: [marketGen()], tech: [techWikiGen()], quiz: [marketQuizGen()] },
+      ["market", "market", "tech", "market", "market", "quiz", "market", "tech", "market", "market", "tech"],
+      { market: "tech", quiz: "market", tech: "market" }
+    );
+  }
+
   /* Mixes several sources by a repeating pattern; a dead or missing source falls back to the next one. */
   async function* mix(groups, PAT, fallback) {
     const rr = {};
     const alive = () => Object.keys(groups).some((k) => groups[k].length);
-    let i = 0, lastErr = null, misses = 0;
+    let i = 0, lastErr = null, misses = 0, stalls = 0, forced = null;
+    const pending = new Map();
     while (alive()) {
-      let key = PAT[i++ % PAT.length];
-      while (key && !(groups[key] && groups[key].length)) key = fallback[key];
+      const hopped = !!forced;
+      let key = forced || PAT[i++ % PAT.length];
+      forced = null;
+      const tried = new Set();
+      while (key && !(groups[key] && groups[key].length) && !tried.has(key)) { tried.add(key); key = fallback[key]; }
+      if (key && !(groups[key] && groups[key].length)) key = null;
       if (!key) {
         if (++misses < PAT.length) continue;
         key = Object.keys(groups).find((k) => groups[k].length);
@@ -480,18 +962,29 @@
       const arr = groups[key];
       const idx = (rr[key] = (rr[key] == null ? 0 : rr[key] + 1)) % arr.length;
       const g = arr[idx];
-      let r;
-      try { r = await g.next(); } catch (e) { lastErr = e; arr.splice(idx, 1); continue; }
-      if (r.done) { arr.splice(idx, 1); continue; }
-      yield r.value;
+      /* Don't let one slow source (say, Finnhub at its rate limit) hold up the whole feed:
+         give it a moment, then move on and pick its answer up on a later turn. */
+      if (!pending.has(g)) pending.set(g, g.next().then((r) => ({ r }), (err) => ({ err })));
+      let res = await Promise.race([pending.get(g), sleep(stalls >= 6 ? 20000 : 1400).then(() => null)]);
+      if (!res) {
+        stalls++;
+        const fb = fallback[key];
+        if (!hopped && fb && groups[fb] && groups[fb].length) forced = fb;
+        continue;
+      }
+      pending.delete(g);
+      if (res.err) { lastErr = res.err; arr.splice(arr.indexOf(g), 1); continue; }
+      if (res.r.done) { arr.splice(arr.indexOf(g), 1); continue; }
+      stalls = 0;
+      yield res.r.value;
     }
     if (lastErr) throw lastErr;
   }
-  const FALLBACK = { quiz: "random", liked: "topic", topic: "random", random: "trend", featured: "trend", otd: "trend", news: "trend" };
+  const FALLBACK = { market: "tech", tech: "trend", quiz: "tech", liked: "topic", topic: "tech", random: "trend", featured: "trend", otd: "trend", news: "trend" };
   function forYouGen() {
     return mix(
-      { news: [newsGen()], trend: [trendGen()], featured: [featuredGen()], otd: [otdGen()], random: [randomGen()], topic: topicGens(), liked: likedGens(), quiz: [quizGen()] },
-      ["news", "trend", "featured", "random", "otd", "liked", "quiz", "trend", "topic", "news", "random", "liked", "trend", "otd", "topic", "quiz", "random", "featured", "liked", "trend", "news", "random", "otd", "topic", "trend", "liked", "random"],
+      { market: [marketGen()], tech: [techWikiGen()], news: [newsGen()], trend: [trendGen()], featured: [featuredGen()], otd: [otdGen()], random: [randomGen()], topic: topicGens(), liked: likedGens(), quiz: [quizGen()] },
+      ["market", "news", "market", "tech", "trend", "market", "quiz", "market", "tech", "featured", "market", "liked", "market", "otd", "tech", "market", "topic", "market", "quiz", "random", "market", "tech", "market", "news", "market", "trend", "tech", "market", "liked"],
       FALLBACK
     );
   }
@@ -503,6 +996,7 @@
     );
   }
   function makeGen(id) {
+    if (id === "stocks") return stocksFeedGen();
     if (id === "news") return newsGen();
     if (id === "trend") return trendGen();
     if (id === "otd") return otdGen();
@@ -519,6 +1013,7 @@
     save: svg('<path d="M6 3h12v18l-6-4.5L6 21z"/>', { w: 1.9 }),
     send: svg('<path d="M21.5 3 10.2 14.3"/><path d="M21.5 3l-6.8 18-4.5-6.7L3.5 9.8z"/>', { w: 1.9 }),
     related: svg('<circle cx="10" cy="14" r="6"/><path d="M2.5 6.2 22 2.6"/><circle cx="8.9" cy="8" r="1.3" fill="currentColor" stroke="none"/>', { w: 1.9 }),
+    candle: svg('<path d="M7 3v18M17 3v18"/><rect x="4.5" y="7" width="5" height="8" rx="1"/><rect x="14.5" y="5" width="5" height="10" rx="1"/>', { w: 1.9 }),
     book: svg('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>', { w: 2 }),
     out: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>',
     up: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>',
@@ -540,6 +1035,10 @@
     related: svg('<circle cx="10" cy="14" r="6"/><path d="M2.5 6.2 22 2.6"/>', { w: 2.2 }),
     quiz: svg('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8"/><circle cx="12" cy="17.2" r=".9" fill="currentColor"/>', { w: 2.1 }),
     review: svg('<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/>', { w: 2.2 }),
+    mnews: svg('<path d="M7 3v18M17 3v18"/><rect x="4.5" y="7" width="5" height="8" rx="1"/><rect x="14.5" y="5" width="5" height="10" rx="1"/>', { w: 2 }),
+    movers: svg('<path d="M4 20V11M10 20V5M16 20v-6M22 20H2"/>', { w: 2.2 }),
+    earnings: svg('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M12 12.5v5M10.5 13.8c0-.8.7-1.3 1.5-1.3s1.5.4 1.5 1.1c0 1.6-3 .9-3 2.6 0 .7.7 1.1 1.5 1.1s1.5-.5 1.5-1.2"/>', { w: 1.8 }),
+    connect: svg('<path d="M4 20V11M10 20V5M16 20v-6M22 20H2"/>', { w: 2.2 }),
     lesson: svg('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>', { w: 2.1 })
   };
 
@@ -726,6 +1225,7 @@
     ava.innerHTML = GLYPH[it.kind] || GLYPH.random;
     row.append(ava);
     let name = k.label, sub = "", topic = null;
+    if (m.sym && (it.kind === "mnews" || it.kind === "earnings" || it.kind === "topic" || it.kind === "related")) logoInto(ava, m.sym);
     if (it.kind === "trend") {
       if (m.rank) name = "Trending #" + m.rank;
       if (Number.isFinite(m.views)) sub = nf.format(m.views) + " reads";
@@ -740,10 +1240,21 @@
     } else if (it.kind === "related" && m.label) {
       name = (m.why === "liked" ? "Because you liked " : "Related to ") + m.label;
       topic = m.label;
+    } else if (it.kind === "mnews") {
+      name = m.sym;
+      sub = [m.source, m.time ? ago(m.time) : ""].filter(Boolean).join(" · ");
+    } else if (it.kind === "earnings") {
+      name = m.sym;
+      sub = "Earnings";
+    } else if (it.kind === "movers") {
+      sub = statusLabel();
     }
+    if (m.sym && it.kind === "topic") { name = m.label + " · " + m.sym; sub = ""; }
+    if (m.sym) topic = null;
     row.append(el("b", "name", name));
     if (sub) row.append(el("span", "sub", sub));
     if (it.kind === "trend" && m.hist && m.hist.length > 2) row.append(sparkline(m.hist));
+    if (m.sym && getKey()) row.append(chgPill(m.sym));
     if (topic) {
       const f = el("button", "follow");
       f.type = "button";
@@ -757,6 +1268,20 @@
 
   function ctaRow(it) {
     const row = el("div", "ctas");
+    if (it.kind === "mnews") {
+      const read = el("a", "readpill primary");
+      read.href = it.url;
+      read.target = "_blank";
+      read.rel = "noopener";
+      read.innerHTML = "<span>Read on " + (it.meta.source || "the source") + "</span>" + ICON.out;
+      const learn = el("button", "readpill");
+      learn.type = "button";
+      learn.innerHTML = sized(ICON.book, 16) + "<span>" + (it.meta.company || it.meta.sym) + "</span>";
+      learn.setAttribute("aria-label", "Learn about " + (it.meta.company || it.meta.sym));
+      learn.addEventListener("click", (e) => { e.stopPropagation(); openLesson(lessonSeed(it)); });
+      row.append(read, learn);
+      return row;
+    }
     if (it.kind !== "picture") {
       const learn = el("button", "readpill primary");
       learn.type = "button";
@@ -829,6 +1354,7 @@
 
   function reelEl(it, feed, hint) {
     if (it.kind === "quiz") return quizReelEl(it);
+    if (it.kind === "movers" || it.kind === "earnings" || it.kind === "connect") return dataReelEl(it);
     const k = KINDS[it.kind] || KINDS.random;
     const art = el("article", "reel k-" + it.kind);
     art.dataset.key = it.key;
@@ -844,7 +1370,12 @@
     setPressed(like, liked.has(it.key));
     like.addEventListener("click", (e) => { e.stopPropagation(); toggleLike(it); });
     rail.append(like);
-    if (it.kind !== "picture") {
+    if (it.kind === "mnews") {
+      const stk = railBtn("stk", ICON.candle, it.meta.sym);
+      stk.setAttribute("aria-label", "Open " + it.meta.sym);
+      stk.addEventListener("click", (e) => { e.stopPropagation(); openStock(it.meta.sym); });
+      rail.append(stk);
+    } else if (it.kind !== "picture") {
       const rel = railBtn("rel", ICON.related, "Related");
       rel.addEventListener("click", (e) => { e.stopPropagation(); loadRelated(it, art, rel, feed); });
       rail.append(rel);
@@ -887,6 +1418,48 @@
       }
       updateLearnBadges();
     }));
+    art.append(el("div", "shade-top"), box);
+    return art;
+  }
+
+  function dataReelEl(it) {
+    const art = el("article", "reel data noimg k-" + it.kind);
+    art.dataset.key = it.key;
+    art.style.setProperty("--h", KINDS[it.kind].h);
+    art._item = it;
+    const box = el("div", "qcard");
+    box.append(whoEl(it), el("h2", "qprompt", it.hook));
+    const m = it.meta || {};
+    const row = el("div", "ctas");
+    if (it.kind === "movers") {
+      if (it.text) box.append(el("p", "qctx", it.text));
+      box.append(moversChart(m.rows || [], openStock));
+      box.append(el("p", "qnext", "Prices from Finnhub" + (m.at ? " · " + clock(m.at) : "")));
+      const b = el("button", "readpill primary");
+      b.type = "button";
+      b.innerHTML = sized(ICON.candle, 16) + "<span>Open Stocks</span>";
+      b.addEventListener("click", (e) => { e.stopPropagation(); showTab("stocks"); });
+      row.append(b);
+    } else if (it.kind === "earnings") {
+      if (it.text) box.append(el("p", "qctx", it.text));
+      const b = el("button", "readpill primary");
+      b.type = "button";
+      b.innerHTML = sized(ICON.candle, 16) + "<span>See " + m.sym + "</span>";
+      b.addEventListener("click", (e) => { e.stopPropagation(); openStock(m.sym); });
+      const l = el("button", "readpill");
+      l.type = "button";
+      l.innerHTML = sized(ICON.book, 16) + "<span>Learn about " + (m.company || m.sym) + "</span>";
+      l.addEventListener("click", (e) => { e.stopPropagation(); openLesson(lessonSeed(it)); });
+      row.append(b, l);
+    } else {
+      if (it.text) box.append(el("p", "qctx", it.text));
+      const b = el("button", "readpill primary");
+      b.type = "button";
+      b.innerHTML = sized(ICON.candle, 16) + "<span>Set it up</span>";
+      b.addEventListener("click", (e) => { e.stopPropagation(); showTab("stocks"); });
+      row.append(b);
+    }
+    box.append(row);
     art.append(el("div", "shade-top"), box);
     return art;
   }
@@ -958,7 +1531,7 @@
       let last = 0, lx = 0, ly = 0;
       sc.addEventListener("click", (e) => {
         const card = e.target.closest(".reel[data-key]");
-        if (!card || card.classList.contains("quiz") || e.target.closest("button, a, .cap")) { last = 0; return; }
+        if (!card || card.classList.contains("quiz") || card.classList.contains("data") || e.target.closest("button, a, .cap")) { last = 0; return; }
         const now = Date.now();
         if (now - last < 330 && Math.abs(e.clientX - lx) < 44 && Math.abs(e.clientY - ly) < 44) {
           last = 0;
@@ -974,11 +1547,13 @@
       this.shown = new Set();
       this.skipRead = skipRead;
       this.factory = factory;
+      this.sig = genSig = { dead: false };
       this.gen = factory();
       this.exhausted = false;
       this.loadMore(5);
     }
     stop() {
+      if (this.sig) this.sig.dead = true;
       this.token++;
       this.loading = false;
       this.timers.forEach(clearTimeout);
@@ -1030,7 +1605,11 @@
         }
       }
     }
-    maybeMore() { if (this.sc.scrollTop + this.sc.clientHeight * 3.5 >= this.sc.scrollHeight) this.loadMore(5); }
+    maybeMore() {
+      const h = this.sc.clientHeight;
+      if (!h) return; // hidden behind another tab: load when it's shown again
+      if (this.sc.scrollTop + h * 3.5 >= this.sc.scrollHeight) this.loadMore(5);
+    }
     errorReel() {
       const first = !this.sc.querySelector(".reel[data-key]");
       return messageReel({
@@ -1038,13 +1617,13 @@
         kicker: "No connection",
         title: first ? "Couldn't reach Wikipedia." : "The feed stalled.",
         body: navigator.onLine === false ? "You're offline. Connect to the internet and try again." : "Wikipedia didn't answer. Check your connection, then try again.",
-        buttons: [{ label: "Try again", primary: true, run: (art) => { art.remove(); this.exhausted = false; this.gen = this.factory(); this.loadMore(5); } }]
+        buttons: [{ label: "Try again", primary: true, run: (art) => { art.remove(); this.exhausted = false; this.sig = genSig = { dead: false }; this.gen = this.factory(); this.loadMore(5); } }]
       });
     }
     onSeen(entries) {
       for (const e of entries) {
         const c = e.target, key = c.dataset.key;
-        if (!key || c.classList.contains("quiz")) continue;
+        if (!key || c.classList.contains("quiz") || c.classList.contains("data")) continue;
         if (e.isIntersecting) {
           if (!this.timers.has(c)) this.timers.set(c, setTimeout(() => { this.timers.delete(c); markRead(key); }, 1500));
         } else {
@@ -1246,7 +1825,7 @@
   }
 
   /* ======================= tabs ======================= */
-  const SCROLLERS = { explore: "explore-scroll", learn: "learn-scroll", you: "you-scroll" };
+  const SCROLLERS = { explore: "explore-scroll", stocks: "stocks-scroll", learn: "learn-scroll", you: "you-scroll" };
   function showTab(t) {
     if (t === tab) {
       if (t === "home") homeTap();
@@ -1256,12 +1835,14 @@
     }
     tab = t;
     app.dataset.tab = t;
-    for (const name of ["home", "explore", "learn", "you"]) $("screen-" + name).hidden = t !== name;
+    for (const name of ["home", "explore", "stocks", "learn", "you"]) $("screen-" + name).hidden = t !== name;
     document.querySelectorAll(".nav-btn").forEach((b) => { if (b.dataset.tab === t) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
     toast.hidden = true;
+    if (t === "home") requestAnimationFrame(() => homeFeed.maybeMore());
     if (t === "explore") initExplore();
     if (t === "learn") renderLearn();
     if (t === "you") renderYou();
+    if (t === "stocks") renderStocks(true);
   }
   document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
 
@@ -1271,6 +1852,7 @@
     $("viewer-title").textContent = title;
     $("viewer").hidden = false;
     viewerFeed.start(factory);
+    requestAnimationFrame(() => viewerFeed.maybeMore());
     pushOverlay(() => { $("viewer").hidden = true; viewerFeed.clear(); });
   }
   $("viewer-back").addEventListener("click", back);
@@ -1509,6 +2091,7 @@
 
   /* ---------- story rings ---------- */
   const STORY_BASE = [
+    { id: "watch", name: "Watchlist", kind: "movers" },
     { id: "today", name: "Today", kind: "featured" },
     { id: "news", name: "News", kind: "news" },
     { id: "trend", name: "Trending", kind: "trend" },
@@ -1526,6 +2109,20 @@
         return r.pages.map((x) => { const it = fromAction(x, "topic"); if (it) it.meta = { label: q }; return it; }).filter((it) => it && solid(it, 100)).slice(0, 8);
       }
       if (id === "random") return (await takeRandom()).slice(0, 8);
+      if (id === "watch") {
+        if (!getKey()) return [];
+        if (!quotes.size) await refreshQuotes(false, true);
+        else refreshQuotes().catch(() => {});
+        const top = watch.slice().sort((a, b) => Math.abs(dpOf(b.sym) || 0) - Math.abs(dpOf(a.sym) || 0)).slice(0, 8);
+        /* Show whatever is ready within a few seconds; slow tickers finish in the background. */
+        const jobs = top.map((w) => companyNews(w.sym, true).catch(() => []));
+        let lists = await Promise.all(jobs.map((j) => Promise.race([j, sleep(3500).then(() => null)])));
+        if (lists.some((l) => l === null)) {
+          storyCache.delete("watch");
+          if (!lists.some((l) => l && l.length)) lists = [await Promise.race(jobs.map((j) => j.then((l) => (l.length ? l : new Promise(() => {})))).concat(Promise.all(jobs).then(() => [])))];
+        }
+        return lists.filter(Boolean).map((l) => l.find((x) => x.img) || l[0]).filter(Boolean);
+      }
       const d = await today();
       if (!d) throw new Error("offline");
       if (id === "today") return [d.tfa, d.picture].filter(Boolean);
@@ -1634,6 +2231,7 @@
     else if (it.kind === "otd" && Number.isFinite(m.year)) when = yearText(m.year);
     else if (m.date) when = m.date;
     else if (def.id === "random") when = "Random";
+    if (it.kind === "mnews") when = it.meta.sym + " " + pct(dpOf(it.meta.sym)) + " · " + (it.meta.source || "");
     $("st-when").textContent = when;
     stage.textContent = "";
     const slide = el("div", "reel k-" + it.kind);
@@ -1647,7 +2245,7 @@
     for (let i = 0; i < bars.length; i++) bars[i].firstChild.style.width = i < si ? "100%" : "0%";
     const read = $("st-read");
     read.href = it.url;
-    read.setAttribute("aria-label", it.kind === "picture" ? "View full image" : "Read on Wikipedia");
+    read.setAttribute("aria-label", it.kind === "picture" ? "View full image" : it.kind === "mnews" ? "Read on " + (it.meta.source || "the source") : "Read on Wikipedia");
     $("st-learn").hidden = it.kind === "picture";
     const like = $("st-like");
     like.dataset.key = it.key;
@@ -1712,7 +2310,7 @@
   $("st-like").addEventListener("click", () => { const it = st.items && st.items[st.si]; if (it) toggleLike(it); });
   $("st-share").addEventListener("click", () => { const it = st.items && st.items[st.si]; if (it) { st.paused = true; share(it).finally(() => { st.paused = false; }); } });
   $("st-read").addEventListener("click", () => { st.paused = true; setTimeout(() => { st.paused = false; }, 1500); });
-  $("st-learn").addEventListener("click", () => { const it = st.items && st.items[st.si]; if (it) openLesson(it); });
+  $("st-learn").addEventListener("click", () => { const it = st.items && st.items[st.si]; if (it) openLesson(lessonSeed(it)); });
 
   /* ======================= lessons ======================= */
   const SKIP_SEC = /^(see also|references|notes|external links|further reading|bibliography|sources|citations|footnotes|gallery|works cited|explanatory notes|notes and references|references and notes|primary sources|secondary sources|literature|publications|selected works|selected publications|filmography|discography|awards|awards and honou?rs|honou?rs|works|cited sources|general and cited sources|general sources|list of works|in popular culture|popular culture)$/i;
@@ -2107,7 +2705,9 @@
     const otd = shuffle(d.otd);
     const trImg = shuffle(d.trend.filter((x) => x.img));
     const trDesc = shuffle(d.trend.filter((x) => x.desc));
-    const qs = [otdYear(otd[0]), trendTop(d.trend), picMatch(trImg[0], P), otdYear(otd[1]), descMatch(trDesc[0], P)].filter(Boolean);
+    if (getKey()) { try { await refreshQuotes(); } catch (e) {} }
+    const mq = marketQuiz();
+    const qs = [mq ? mq.q : null, otdYear(otd[0]), trendTop(d.trend), picMatch(trImg[0], P), otdYear(otd[1]), descMatch(trDesc[0], P)].filter(Boolean).slice(0, 5);
     if (!qs.length) { lsError("There wasn't enough in today's feed to build questions.", null); return; }
     ls.slides = qs.map((q, i) => ({ t: "quiz", q, qi: i, qn: qs.length })).concat([{ t: "end" }]);
     renderBars();
@@ -2127,8 +2727,16 @@
 
   /* ======================= learn tab ======================= */
   const collectionCache = new Map();
+  function collectionsNow() {
+    const mine = watch.map((w) => w.wiki).filter(Boolean).slice(0, 12);
+    return [
+      { name: "Tech stocks 101", h: 160, titles: ["Stock", "Market capitalization", "Price–earnings ratio", "Earnings per share", "Stock split", "Short (finance)", "Nasdaq-100", "Initial public offering"] },
+      mine.length ? { name: "The companies you watch", h: 250, titles: mine } : null
+    ].filter(Boolean).concat(COLLECTIONS);
+  }
   function loadCollection(c) {
-    if (collectionCache.has(c.name)) return collectionCache.get(c.name);
+    const ck = c.name + ":" + c.titles.join("|");
+    if (collectionCache.has(ck)) return collectionCache.get(ck);
     const p = (async () => {
       const j = await getJSON(actionUrl({ titles: c.titles.join("|"), redirects: 1, prop: "pageimages|description", piprop: "thumbnail", pithumbsize: 500, pilicense: "any" }));
       const q = j.query || {};
@@ -2149,8 +2757,8 @@
       }
       return out;
     })();
-    collectionCache.set(c.name, p);
-    p.catch(() => collectionCache.delete(c.name));
+    collectionCache.set(ck, p);
+    p.catch(() => collectionCache.delete(ck));
     return p;
   }
   function lessonCard(it, hue) {
@@ -2218,7 +2826,7 @@
     });
     const wrap = $("collections");
     wrap.textContent = "";
-    for (const c of COLLECTIONS) {
+    for (const c of collectionsNow()) {
       const sec = el("section", "shelf-sec");
       sec.append(el("h2", "shelf-title", c.name));
       const shelf2 = el("div", "shelf");
@@ -2289,6 +2897,364 @@
   for (const name of ["saved", "liked", "lessons"]) $("gtab-" + name).addEventListener("click", () => { youTab = name; renderYou(); });
   $("you-explore").addEventListener("click", () => { showTab("explore"); $("search-input").focus(); });
 
+  /* ======================= stocks tab ======================= */
+  let wlSort = store.get("wlSort", "moves");
+  if (!["moves", "az", "mine"].includes(wlSort)) wlSort = "moves";
+  let stocksTimer = null;
+  function renderStocks(refresh, force) {
+    const has = !!getKey();
+    $("stocks-setup").hidden = has && !keyBroken;
+    $("key-broken").hidden = !keyBroken;
+    $("stocks-live").hidden = !has;
+    $("key-row").hidden = !has;
+    paintStatus();
+    renderSummary();
+    renderWatchlist();
+    renderEarnings();
+    if (has && refresh) {
+      marketStatus().then(paintStatus);
+      refreshQuotes(!!force, true).then(() => { renderSummary(); renderWatchlist(); warmProfiles(); }).catch((e) => {
+        if (e.code === "badkey") { renderStocks(false); }
+        else showToast(e.code === "rate" ? "Finnhub asked us to slow down. Prices refresh in a moment." : "Couldn't refresh prices. Showing the last ones.", { hideAfter: 2600 });
+      });
+      earningsSoon(true).then(renderEarnings).catch(() => {});
+    }
+  }
+  function paintStatus() {
+    const s = $("mkt-status");
+    s.textContent = "";
+    s.classList.toggle("open", !!(mstatus.open || mstatus.session === "regular"));
+    s.append(el("i"), el("span", null, statusLabel()));
+    if (quotesAt && getKey()) s.append(el("span", "mkt-at", "· updated " + clock(quotesAt)));
+  }
+  function renderSummary() {
+    const box = $("stocks-summary");
+    box.textContent = "";
+    const rows = moverRows();
+    if (!getKey() || rows.length < 2) { box.hidden = true; return; }
+    box.hidden = false;
+    const it = moversItem();
+    box.append(el("h2", "sum-h", it.hook), el("p", "sum-p", it.text), moversChart(rows, openStock));
+  }
+  function sortedWatch() {
+    const list = watch.slice();
+    if (wlSort === "az") list.sort((a, b) => a.sym.localeCompare(b.sym));
+    else if (wlSort === "moves") list.sort((a, b) => (dpOf(b.sym) ?? -999) - (dpOf(a.sym) ?? -999));
+    return list;
+  }
+  function renderWatchlist() {
+    document.querySelectorAll("#wl-sort button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.sort === wlSort ? "true" : "false"));
+    const ul = $("wl");
+    ul.textContent = "";
+    for (const w of sortedWatch()) {
+      const q = quotes.get(w.sym);
+      const li = el("li");
+      const b = el("button", "wl-row");
+      b.type = "button";
+      const logo = el("span", "wl-logo");
+      logoInto(logo, w.sym);
+      const id = el("span", "wl-id");
+      id.append(el("b", null, w.sym), el("small", null, w.name));
+      const px = el("span", "wl-px");
+      const price = el("b", null, q ? usd(q.c) : "–");
+      price.dataset.px = w.sym;
+      px.append(price, chgPill(w.sym));
+      b.append(logo, id, rangeBar(q && q.l, q && q.h, q && q.c, q ? [{ v: q.pc, label: "Previous close" }] : []), px);
+      b.addEventListener("click", () => openStock(w.sym));
+      li.append(b);
+      ul.append(li);
+    }
+    $("wl-count").textContent = watch.length + (watch.length === 1 ? " stock" : " stocks");
+  }
+  function renderEarnings(list) {
+    const sec = $("earn-sec");
+    const ul = $("earn-list");
+    if (!getKey()) { sec.hidden = true; return; }
+    if (!list) { const ck = "earnSoon:" + watch.map((w) => w.sym).join(","); list = fhGet(ck, 6 * 3600e3); }
+    if (!list || !list.length) { sec.hidden = true; return; }
+    sec.hidden = false;
+    ul.textContent = "";
+    for (const e of list.slice(0, 8)) {
+      const w = watchOf(e.symbol) || { name: e.symbol };
+      const li = el("li");
+      const b = el("button", "earn-row");
+      b.type = "button";
+      const d = new Date(e.date + "T12:00:00");
+      const cal = el("span", "earn-cal");
+      cal.append(el("small", null, d.toLocaleDateString("en-US", { month: "short" })), el("b", null, String(d.getDate())));
+      const tx = el("span", "earn-tx");
+      tx.append(el("b", null, w.name + " · " + e.symbol), el("small", null, cap1((dayWord(e.date) + (HOUR[e.hour] || "")).replace(/^on /, "")) + (Number.isFinite(e.epsEstimate) ? " · EPS est. " + usd(e.epsEstimate) : "")));
+      b.append(cal, tx);
+      b.addEventListener("click", () => openStock(e.symbol));
+      li.append(b);
+      ul.append(li);
+    }
+  }
+  document.querySelectorAll("#wl-sort button").forEach((b) => b.addEventListener("click", () => { wlSort = b.dataset.sort; store.set("wlSort", wlSort); renderWatchlist(); }));
+  $("stocks-refresh").addEventListener("click", () => { if (!getKey()) { $("key-input").focus(); return; } renderStocks(true, true); showToast("Refreshing prices…", { hideAfter: 1200 }); });
+
+  async function connectKey(key, msgEl, btn) {
+    key = String(key || "").trim();
+    if (!key) { msgEl.textContent = "Paste your key first."; return false; }
+    btn.disabled = true;
+    msgEl.textContent = "Checking your key…";
+    try {
+      const q = await fh("/quote", { symbol: "AAPL" }, { key, high: true });
+      if (!q || !Number.isFinite(q.c)) throw fhError("http");
+      store.set("fhkey", key);
+      keyBroken = false;
+      msgEl.textContent = "Connected.";
+      showToast("Live prices connected", { hideAfter: 2000 });
+      renderStocks(true, true);
+      if (mode === "foryou" || mode === "stocks") setMode(mode, { force: true });
+      return true;
+    } catch (e) {
+      msgEl.textContent = e.code === "badkey" ? "Finnhub didn't accept that key. Copy it again from your Finnhub dashboard and paste the whole thing." : e.code === "rate" ? "Finnhub is rate-limiting right now. Wait a minute and try again." : "Couldn't reach Finnhub. Check your connection and try again.";
+      return false;
+    } finally { btn.disabled = false; }
+  }
+  $("key-form").addEventListener("submit", (e) => { e.preventDefault(); connectKey($("key-input").value, $("key-msg"), $("key-go")); });
+  $("key-change").addEventListener("click", () => { keyBroken = true; renderStocks(false); $("key-input").value = ""; $("key-input").focus(); });
+  $("key-remove").addEventListener("click", () => {
+    const b = $("key-remove");
+    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to remove"; setTimeout(() => { b.dataset.armed = ""; b.textContent = "Remove key"; }, 4000); return; }
+    store.set("fhkey", "");
+    keyBroken = false;
+    b.dataset.armed = "";
+    b.textContent = "Remove key";
+    renderStocks(false);
+    showToast("Key removed from this phone", { hideAfter: 1800 });
+  });
+  function startStocksTimer() {
+    clearInterval(stocksTimer);
+    stocksTimer = setInterval(() => {
+      if (document.hidden || !getKey()) return;
+      const close = tab === "stocks" || !$("stock").hidden;
+      const onScreen = close || (tab === "home" && (mode === "stocks" || mode === "foryou"));
+      if (!onScreen) return;
+      if (!close && Date.now() - quotesAt < 110000) return;
+      const live = mstatus.open || mstatus.session === "pre-market" || mstatus.session === "post-market";
+      if (!live && Date.now() - quotesAt < 10 * 60000) return;
+      refreshQuotes(true).then(() => { if (tab === "stocks") { renderSummary(); paintStatus(); } if (!$("stock").hidden) paintStockPrice(); }).catch(() => {});
+      marketStatus().then(() => { if (tab === "stocks") paintStatus(); });
+    }, 60000);
+  }
+
+  /* ---------- add a stock ---------- */
+  const addSheet = $("add-sheet");
+  let addTok = 0, addTimer = null;
+  function openAdd() {
+    if (!getKey()) { showToast("Connect your Finnhub key first.", { hideAfter: 2200 }); $("key-input").focus(); return; }
+    addSheet.hidden = false;
+    $("add-input").value = "";
+    $("add-results").textContent = "";
+    $("add-msg").textContent = "Search by company name or ticker.";
+    pushOverlay(() => { addSheet.hidden = true; });
+    $("add-input").focus();
+  }
+  $("wl-add").addEventListener("click", openAdd);
+  addSheet.addEventListener("click", (e) => { if (e.target === addSheet || e.target.closest("[data-close]")) back(); });
+  $("add-input").addEventListener("input", () => {
+    clearTimeout(addTimer);
+    const q = $("add-input").value.trim();
+    if (!q) { $("add-results").textContent = ""; return; }
+    addTimer = setTimeout(() => runAdd(q), 300);
+  });
+  $("add-form").addEventListener("submit", (e) => { e.preventDefault(); const q = $("add-input").value.trim(); if (q) runAdd(q); });
+  async function runAdd(q) {
+    const my = ++addTok;
+    $("add-msg").textContent = "Searching…";
+    try {
+      const res = await symbolSearch(q);
+      if (my !== addTok) return;
+      const ul = $("add-results");
+      ul.textContent = "";
+      $("add-msg").textContent = res.length ? "" : "No US-listed stocks match that. Try the ticker.";
+      for (const r of res) {
+        const li = el("li");
+        const b = el("button");
+        b.type = "button";
+        const inList = !!watchOf(r.symbol);
+        b.append(el("b", null, r.displaySymbol || r.symbol), el("span", null, cleanName(r.description)), el("em", null, inList ? "On your list" : "Add"));
+        b.disabled = inList;
+        b.addEventListener("click", () => {
+          if (watchOf(r.symbol)) return;
+          watch.push({ sym: r.symbol, name: cleanName(r.description) || r.symbol, wiki: null });
+          saveWatch();
+          back();
+          showToast(r.symbol + " added to your watchlist", { hideAfter: 1800 });
+          renderStocks(false);
+          fh("/quote", { symbol: r.symbol }, { high: true }).then((q) => { if (q && q.c > 0) { quotes.set(r.symbol, q); renderSummary(); renderWatchlist(); } }).catch(() => {});
+        });
+        li.append(b);
+        ul.append(li);
+      }
+    } catch (e) {
+      if (my === addTok) $("add-msg").textContent = e.code === "rate" ? "Finnhub is busy. Try again in a moment." : "Search didn't work. Check your connection.";
+    }
+  }
+
+  /* ---------- stock page ---------- */
+  const stockEl = $("stock");
+  let stockSym = null;
+  const STAT_LESSONS = { "Market cap": "Market capitalization", "P/E (TTM)": "Price–earnings ratio", "Beta": "Beta (finance)", "Dividend yield": "Dividend yield", "EPS (TTM)": "Earnings per share" };
+  function firstNum(obj, keys) { for (const k of keys) if (Number.isFinite(obj[k])) return obj[k]; return null; }
+  function paintStockPrice() {
+    if (!stockSym) return;
+    const q = quotes.get(stockSym);
+    const box = $("sk-price");
+    if (!box) return;
+    box.textContent = "";
+    const big = el("div", "sk-big", q ? usd(q.c) : "–");
+    big.dataset.px = stockSym;
+    const line = el("div", "sk-line");
+    if (q && Number.isFinite(q.d)) line.append(el("span", "sk-d " + (q.d > 0 ? "up" : q.d < 0 ? "down" : ""), (q.d > 0 ? "+" : q.d < 0 ? "−" : "") + usd(Math.abs(q.d)).replace("$", "$")), chgPill(stockSym));
+    line.append(el("span", "sk-when", "today · " + statusLabel() + (q && q.t ? " · as of " + clock(q.t * 1000) : "")));
+    box.append(big, line);
+    const day = $("sk-day");
+    if (day && q) {
+      day.textContent = "";
+      day.append(el("div", "sk-lab", "Today's range"), rangeBar(q.l, q.h, q.c, [{ v: q.o, label: "Open" }, { v: q.pc, label: "Previous close" }], true));
+      const kv = el("div", "sk-kv");
+      kv.append(el("span", null, "Open " + usd(q.o)), el("span", null, "Prev. close " + usd(q.pc)));
+      day.append(kv);
+    }
+  }
+  function openStock(sym) {
+    stockSym = sym;
+    const w = watchOf(sym) || { sym, name: sym, wiki: null };
+    stockEl.hidden = false;
+    pushOverlay(() => { stockEl.hidden = true; stockSym = null; });
+    const head = $("sk-head");
+    head.textContent = "";
+    const logo = el("span", "wl-logo");
+    logoInto(logo, sym);
+    const id = el("span", "sk-id");
+    id.append(el("b", null, sym), el("small", null, w.name));
+    const follow = el("button", "follow");
+    follow.type = "button";
+    const paintFollow = () => { const on = !!watchOf(sym); follow.setAttribute("aria-pressed", on ? "true" : "false"); follow.textContent = on ? "Watching" : "Watch"; };
+    paintFollow();
+    follow.addEventListener("click", () => {
+      if (watchOf(sym)) {
+        if (follow.dataset.armed !== "1") { follow.dataset.armed = "1"; follow.textContent = "Tap to remove"; setTimeout(() => { follow.dataset.armed = ""; paintFollow(); }, 3500); return; }
+        watch = watch.filter((x) => x.sym !== sym);
+        follow.dataset.armed = "";
+        showToast(sym + " removed from your watchlist", { hideAfter: 1800 });
+      } else {
+        watch.push(w);
+        showToast(sym + " added to your watchlist", { hideAfter: 1800 });
+      }
+      saveWatch();
+      paintFollow();
+      if (tab === "stocks") renderStocks(false);
+    });
+    head.append(logo, id, follow);
+
+    const body = $("sk-body");
+    body.textContent = "";
+    body.scrollTop = 0;
+    const price = el("section", "sk-sec");
+    price.id = "sk-price";
+    const day = el("section", "sk-sec");
+    day.id = "sk-day";
+    const yr = el("section", "sk-sec");
+    const stats = el("section", "sk-sec sk-stats");
+    const earn = el("section", "sk-sec");
+    const learn = el("section", "sk-sec sk-learn");
+    const news = el("section", "sk-sec");
+    body.append(price, day, yr, stats, earn, learn, news, el("p", "about", "Prices, company data, earnings and news come from Finnhub and can lag. This is for keeping an eye on things and learning, not investment advice."));
+    paintStockPrice();
+
+    const lb = el("button", "readpill primary");
+    lb.type = "button";
+    lb.innerHTML = sized(ICON.book, 16) + "<span>Learn about " + w.name + "</span>";
+    lb.addEventListener("click", async () => {
+      lb.disabled = true;
+      try { const t = await wikiFor(w); if (t) openLesson({ key: t, title: t, kind: "lesson", meta: {} }); else showToast("Couldn't find a Wikipedia article for " + w.name + ".", { hideAfter: 2400 }); }
+      catch (e) { showToast("Couldn't reach Wikipedia.", { hideAfter: 2000 }); }
+      finally { lb.disabled = false; }
+    });
+    learn.append(lb);
+
+    if (!getKey()) { price.append(el("p", "learn-note", "Connect your Finnhub key in the Stocks tab to see prices and news here.")); return; }
+    fh("/quote", { symbol: sym }, { high: true }).then((q) => { if (q && q.c > 0) { quotes.set(sym, q); paintStockPrice(); updatePills(); } }).catch(() => {});
+    profile(sym, true).then((p) => {
+      paintLogos(sym);
+      if (stockSym !== sym || !p) return;
+      if (p.weburl) { const a = el("a", "readpill"); a.href = p.weburl; a.target = "_blank"; a.rel = "noopener"; a.innerHTML = "<span>Company site</span>" + ICON.out; learn.append(a); }
+      stats.dataset.cap = p.marketCapitalization || "";
+      stats.dataset.ind = p.finnhubIndustry || "";
+      stats.dataset.ipo = p.ipo || "";
+      paintStats(stats, null);
+    }).catch(() => {});
+    metrics(sym).then((m) => {
+      if (stockSym !== sym) return;
+      const hi = firstNum(m, ["52WeekHigh"]), lo = firstNum(m, ["52WeekLow"]);
+      const q = quotes.get(sym);
+      if (hi && lo && q) { yr.append(el("div", "sk-lab", "52-week range"), rangeBar(lo, hi, q.c, [], true)); }
+      paintStats(stats, m);
+    }).catch(() => paintStats(stats, {}));
+    fh("/calendar/earnings", { symbol: sym, from: dayPlus(-1), to: dayPlus(90) }, { ttl: 6 * 3600e3, high: true }).then((j) => {
+      if (stockSym !== sym) return;
+      const next = asArr(j && j.earningsCalendar).filter((e) => e && e.date >= todayKey()).sort((a, b) => (a.date < b.date ? -1 : 1))[0];
+      if (!next) return;
+      const it = earningsItem(next);
+      earn.append(el("div", "sk-lab", "Next earnings"), el("p", "sk-earn", cap1(it.hook.replace(w.name + " reports earnings ", "")) + "."), it.text ? el("p", "sk-muted", it.text) : "");
+    }).catch(() => {});
+    companyNews(sym, true).then((items) => {
+      if (stockSym !== sym) return;
+      news.append(el("div", "sk-lab", "Latest news"));
+      if (!items.length) { news.append(el("p", "sk-muted", "No news from the last few days.")); return; }
+      const ul = el("ul", "sk-news");
+      items.slice(0, 10).forEach((it, i) => {
+        const li = el("li");
+        const b = el("button");
+        b.type = "button";
+        const th = el("span", "sk-th");
+        if (it.img) th.append(chainImg([it.img.src], "", (im) => im.remove()));
+        const tx = el("span", "sk-tx");
+        tx.append(el("b", null, it.title), el("small", null, [it.meta.source, it.meta.time ? ago(it.meta.time) : ""].filter(Boolean).join(" · ")));
+        b.append(th, tx);
+        b.addEventListener("click", () => openViewer(sym + " news", () => (async function* () { for (const x of items.slice(i)) yield x; })()));
+        li.append(b);
+        ul.append(li);
+      });
+      news.append(ul);
+    }).catch(() => {});
+  }
+  function paintStats(box, m) {
+    if (m) box._m = m;
+    m = box._m || {};
+    box.textContent = "";
+    const cap = Number(box.dataset.cap) * 1e6;
+    const rows = [
+      ["Market cap", bigUsd(Number.isFinite(cap) && cap > 0 ? cap : (firstNum(m, ["marketCapitalization"]) || 0) * 1e6)],
+      ["P/E (TTM)", (v => (v == null ? "–" : v.toFixed(1)))(firstNum(m, ["peTTM", "peBasicExclExtraTTM", "peExclExtraTTM", "peNormalizedAnnual"]))],
+      ["EPS (TTM)", (v => (v == null ? "–" : usd(v)))(firstNum(m, ["epsTTM", "epsBasicExclExtraItemsTTM", "epsExclExtraItemsTTM"]))],
+      ["Beta", (v => (v == null ? "–" : v.toFixed(2)))(firstNum(m, ["beta"]))],
+      ["Dividend yield", (v => (v == null || v === 0 ? "None" : v.toFixed(2) + "%"))(firstNum(m, ["dividendYieldIndicatedAnnual", "currentDividendYieldTTM"]))],
+      ["Industry", box.dataset.ind || "–"]
+    ];
+    const grid = el("div", "stat-grid");
+    for (const [label, val] of rows) {
+      const cell = el("div", "stat");
+      const lessonTitle = STAT_LESSONS[label];
+      if (lessonTitle) {
+        const lb = el("button", "stat-l", label);
+        lb.type = "button";
+        lb.title = "What is this? Open a short lesson";
+        lb.append(el("i", null, "?"));
+        lb.addEventListener("click", () => openLesson({ key: lessonTitle, title: lessonTitle, kind: "lesson", meta: {} }));
+        cell.append(lb);
+      } else cell.append(el("span", "stat-l", label));
+      cell.append(el("b", null, val));
+      grid.append(cell);
+    }
+    box.append(grid);
+  }
+  $("sk-back").addEventListener("click", back);
+
   /* ======================= install ======================= */
   const ua = navigator.userAgent || "";
   const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -2357,7 +3323,7 @@
   /* ======================= keyboard ======================= */
   document.addEventListener("keydown", (e) => {
     if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (!installSheet.hidden) { if (e.key === "Escape") back(); return; }
+    if (!installSheet.hidden || !addSheet.hidden) { if (e.key === "Escape") back(); return; }
     if (!lessonEl.hidden) {
       const s = ls.slides[ls.i];
       if (e.key === "ArrowRight" || e.key === " " || e.key === "Enter") { if (e.key !== "Enter" || !(s && s.t === "quiz")) { e.preventDefault(); lsNext(); } }
@@ -2377,6 +3343,7 @@
       else if (e.key === "Escape") back();
       return;
     }
+    if (!stockEl.hidden && $("viewer").hidden) { if (e.key === "Escape") back(); return; }
     const feed = !$("viewer").hidden ? viewerFeed : tab === "home" ? homeFeed : null;
     if (e.key === "Escape" && !$("viewer").hidden) { back(); return; }
     if (!feed) return;
@@ -2405,6 +3372,7 @@
       if (tab === "home" && $("viewer").hidden && storyEl.hidden && lessonEl.hidden) setMode(mode, { force: true });
     }
     updateLearnBadges();
+    if (getKey() && Date.now() - quotesAt > 60000) refreshQuotes(true).then(() => { if (tab === "stocks") renderStocks(false); }).catch(() => {});
   });
   let rz = null;
   window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { homeFeed.recheck(); viewerFeed.recheck(); }, 150); });
@@ -2415,11 +3383,13 @@
   renderTabs();
   updateLearnBadges();
   setMode(mode, { force: true });
+  startStocksTimer();
+  if (getKey()) marketStatus();
 
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
     window.addEventListener("load", () => { navigator.serviceWorker.register("./sw.js").catch(() => {}); });
   }
 
   // Hooks for automated tests; harmless in normal use.
-  window.__tangent = { showTab, setMode, openStory, openLesson, startReview, startDailyQuiz, homeFeed, viewerFeed, exploreGrid, yearCloze, descMatch, picMatch, otdYear, trendTop, sentences, parseSections, groupSections, excerpt, dueReviews, scheduleReview, gradeReview, reviews, lessons, ls };
+  window.__tangent = { companyNews, earningsSoon, refreshQuotes, quotes, watch: () => watch, openStock, marketQuiz, moversItem, earningsItem, connectKey, fhQ, cleanName, showTab, setMode, openStory, openLesson, startReview, startDailyQuiz, homeFeed, viewerFeed, exploreGrid, yearCloze, descMatch, picMatch, otdYear, trendTop, sentences, parseSections, groupSections, excerpt, dueReviews, scheduleReview, gradeReview, reviews, lessons, ls };
 })();

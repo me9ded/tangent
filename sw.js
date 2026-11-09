@@ -1,5 +1,5 @@
 /* Tangent service worker: keeps the app itself available offline and remembers the last Wikipedia responses. */
-const VERSION = "tangent-v2";
+const VERSION = "tangent-v3";
 const API_CACHE = "tangent-api";
 const SHELL = [
   "./",

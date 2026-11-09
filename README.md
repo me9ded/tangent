@@ -13,6 +13,16 @@ Swipe through Wikipedia instead of doomscrolling. Tangent works like a short-vid
 - **Likes shape For you.** Articles similar to the ones you liked start showing up.
 - **You** shows how many cards you've read, lessons finished, your day streak, quiz accuracy, and grids of what you saved, liked and learned.
 
+## Tech stocks
+
+- **Stocks tab:** a live watchlist of 17 tech stocks to start. Big Tech (AAPL, MSFT, GOOGL, AMZN, META), chips and AI (NVDA, AMD, AVGO, TSM, ASML, INTC), Canadian tech (SHOP, CLS, OTEX) and other big names (TSLA, NFLX, PLTR). You get:
+  - Market status, a movers chart, price and daily change, today's range, and the next earnings dates.
+  - Sorting by Moves, A–Z or Mine. Add any US-listed stock by name or ticker.
+- **Stock page:** price, today's and 52-week ranges, market cap, P/E, EPS, beta, dividend yield, next earnings with analyst estimates, and the latest news. Tap any stat label for a short lesson on what it means.
+- **For you leans on your stocks:** about half the cards are your watchlist's news, the daily movers chart, upcoming earnings, Wikipedia cards about those companies, and quick quizzes on today's moves and tickers. Home also has a dedicated **Stocks** tab.
+- **Watchlist story** in Explore, and **Tech stocks 101** and **The companies you watch** lessons in Learn.
+- Data comes from [Finnhub](https://finnhub.io)'s free plan. You paste your own free key into the Stocks tab, and it's stored only on your phone, never in this repo. Tangent stays under 50 requests a minute and gives things you tap priority over background loading. This is for keeping an eye on things and learning, not investment advice.
+
 ## Learning
 
 - **Lessons:** tap **Learn this** on any card or story. The full Wikipedia article becomes a short tap-through lesson: a cover, an "In short" card, then up to six of the article's sections, each illustrated with a picture from that same section. Numbers are highlighted, and lessons resume where you left off.
@@ -32,6 +42,7 @@ Everything loads live from Wikipedia in your browser. There's no server, account
 | News, Trending, Featured article, Picture of the day, On this day | Wikimedia's daily featured feed (`/api/rest_v1/feed/featured/YYYY/MM/DD`) |
 | More On this day events | `/api/rest_v1/feed/onthisday/events/MM/DD` |
 | Random, search, topics, related | MediaWiki Action API (`generator=random`, `generator=search`, `morelike:`) |
+| Stock prices, profiles, news, earnings, metrics | Finnhub REST API (`/quote`, `/stock/profile2`, `/company-news`, `/calendar/earnings`, `/stock/metric`, `/search`, `/stock/market-status`) with your own key |
 | Lessons | Full article text (`prop=extracts&explaintext&exsectionformat=wiki`) plus section pictures (`/api/rest_v1/page/media-list/{title}`) |
 
 Images are requested at 960px, which is one of Wikimedia's standard thumbnail sizes.

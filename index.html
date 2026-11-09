@@ -65,6 +65,70 @@
     </div>
   </section>
 
+  <!-- Stocks: watchlist, movers, earnings -->
+  <section class="screen stocks" id="screen-stocks" aria-label="Stocks" hidden>
+    <div class="pane-scroll" id="stocks-scroll">
+      <header class="stocks-head">
+        <div class="stocks-title">
+          <h1>Stocks</h1>
+          <p class="mkt" id="mkt-status"></p>
+        </div>
+        <button class="ibtn" id="stocks-refresh" type="button" aria-label="Refresh prices" title="Refresh">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"></path><path d="M20 4v4.5h-4.5"></path></svg>
+        </button>
+      </header>
+
+      <section class="setup" id="stocks-setup">
+        <h2 id="setup-title">Connect live prices</h2>
+        <p class="setup-p" id="key-broken" hidden>Finnhub stopped accepting your saved key. Paste a fresh one below.</p>
+        <p class="setup-p">Tangent gets prices, company news and earnings dates from Finnhub. Their free plan is enough, and the key takes about two minutes to get.</p>
+        <ol class="steps">
+          <li><span>Create a free account at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>.</span></li>
+          <li><span>Copy the API key shown on your Finnhub dashboard.</span></li>
+          <li><span>Paste it here and tap Connect.</span></li>
+        </ol>
+        <form class="ask" id="key-form" autocomplete="off">
+          <input id="key-input" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your Finnhub key" aria-label="Finnhub API key">
+          <button class="go" id="key-go" type="submit">Connect</button>
+        </form>
+        <p class="fine" id="key-msg">Your key stays on this phone. Tangent only sends it to Finnhub.</p>
+      </section>
+
+      <div id="stocks-live">
+        <section class="sum" id="stocks-summary" hidden></section>
+      </div>
+
+      <div class="wl-head">
+        <div>
+          <h2>Watchlist</h2>
+          <small id="wl-count"></small>
+        </div>
+        <div class="seg" id="wl-sort" role="group" aria-label="Sort watchlist">
+          <button type="button" data-sort="moves">Moves</button>
+          <button type="button" data-sort="az">A–Z</button>
+          <button type="button" data-sort="mine">Mine</button>
+        </div>
+      </div>
+      <ul class="wl" id="wl"></ul>
+      <button class="wl-add" id="wl-add" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        Add a stock
+      </button>
+
+      <section class="earn-sec" id="earn-sec" hidden>
+        <h2>Earnings coming up</h2>
+        <ul class="earn-list" id="earn-list"></ul>
+      </section>
+
+      <div class="key-row" id="key-row" hidden>
+        <span>Live data from Finnhub</span>
+        <button type="button" id="key-change">Change key</button>
+        <button type="button" id="key-remove">Remove key</button>
+      </div>
+      <p class="about">Prices can lag a little. This is for keeping an eye on your stocks and learning how markets work, not investment advice.</p>
+    </div>
+  </section>
+
   <!-- Learn: lessons, review, daily quiz -->
   <section class="screen learn" id="screen-learn" aria-label="Learn" hidden>
     <div class="pane-scroll" id="learn-scroll">
@@ -147,6 +211,9 @@
     <button class="nav-btn" data-tab="explore" type="button" aria-label="Explore">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="thick" cx="10.5" cy="10.5" r="6.5"></circle><path class="thick" d="M15.5 15.5 20.5 20.5"></path></svg>
     </button>
+    <button class="nav-btn" data-tab="stocks" type="button" aria-label="Stocks">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v18M17 3v18"></path><rect class="fillable" x="4.5" y="7" width="5" height="8" rx="1"></rect><rect class="fillable" x="14.5" y="5" width="5" height="10" rx="1"></rect></svg>
+    </button>
     <button class="nav-btn" data-tab="learn" type="button" aria-label="Learn">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="fillable" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
       <span class="nav-badge" id="learn-badge" hidden>0</span>
@@ -188,6 +255,35 @@
     <button class="rb like st-like" id="st-like" type="button" aria-label="Like" aria-pressed="false"></button>
     <button class="rb" id="st-share" type="button" aria-label="Share"></button>
   </div>
+</div>
+
+<!-- Stock page -->
+<div class="stock" id="stock" hidden>
+  <header class="sk-top">
+    <button class="back" id="sk-back" type="button" aria-label="Back">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
+    </button>
+    <div class="sk-head" id="sk-head"></div>
+  </header>
+  <div class="pane-scroll sk-body" id="sk-body"></div>
+</div>
+
+<!-- Add a stock -->
+<div class="scrim" id="add-sheet" hidden>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="add-title">
+    <div class="sheet-head">
+      <h2 id="add-title">Add a stock</h2>
+      <button class="x" type="button" data-close aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <form class="ask" id="add-form" autocomplete="off">
+      <input id="add-input" type="search" placeholder="Company or ticker, e.g. Snowflake" aria-label="Company or ticker" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+      <button class="go" type="submit">Search</button>
+    </form>
+    <p class="fine" id="add-msg"></p>
+    <ul class="add-results" id="add-results"></ul>
+  </section>
 </div>
 
 <!-- Lesson reader -->
