@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Tangent</title>
-<meta name="description" content="Swipe through today's Wikipedia instead of doomscrolling: the news, what everyone is reading, on this day, and random rabbit holes.">
+<meta name="description" content="Live prices for the stocks you follow.">
 <meta name="theme-color" content="#0b0a10">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
@@ -16,256 +16,85 @@
 <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="fonts/bricolage-latin.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="fonts/literata-latin.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preconnect" href="https://en.wikipedia.org">
-<link rel="preconnect" href="https://upload.wikimedia.org">
+<link rel="preload" href="fonts/plexmono-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preconnect" href="https://finnhub.io">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="app" id="app" data-tab="home">
-
-  <!-- Home: full-screen swipe feed -->
-  <section class="screen home" id="screen-home" aria-label="Home">
-    <header class="home-top">
-      <nav class="tabs" id="tabs" aria-label="Feeds"></nav>
-    </header>
-    <div class="feed" id="home-feed" tabindex="-1"></div>
-  </section>
-
-  <!-- Explore: search, stories, grid -->
-  <section class="screen explore" id="screen-explore" aria-label="Explore" hidden>
-    <header class="pane-top">
-      <form class="searchbar" id="search-form" autocomplete="off" role="search">
-        <label class="search-field">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5 20 20"></path></svg>
-          <input id="search-input" type="search" maxlength="100" placeholder="Search Wikipedia" aria-label="Search Wikipedia" enterkeyhint="search">
-        </label>
-        <button class="cancel" id="search-cancel" type="button" hidden>Cancel</button>
-      </form>
-    </header>
-    <div class="pane-scroll" id="explore-scroll">
-      <div id="explore-home">
-        <div class="stories" id="stories" aria-label="Today's stories"></div>
-        <div class="grid" id="grid"></div>
-        <div class="grid-foot" id="grid-foot"></div>
+<div class="app">
+  <header class="top">
+    <div class="top-in">
+      <div class="brand">
+        <h1>Tangent</h1>
+        <p class="mkt" id="mkt"><i></i><span>Market closed</span></p>
       </div>
-      <ul class="suggest" id="suggest" hidden></ul>
-      <div id="results" hidden>
-        <div class="results-head">
-          <span class="hash" aria-hidden="true">#</span>
-          <div class="results-text">
-            <h2 id="results-title"></h2>
-            <p>Articles on Wikipedia</p>
-          </div>
-          <button class="follow big" id="results-follow" type="button">Follow</button>
-        </div>
-        <div class="grid" id="rgrid"></div>
-        <div class="grid-foot" id="rgrid-foot"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Stocks: watchlist, movers, earnings -->
-  <section class="screen stocks" id="screen-stocks" aria-label="Stocks" hidden>
-    <div class="pane-scroll" id="stocks-scroll">
-      <header class="stocks-head">
-        <div class="stocks-title">
-          <h1>Stocks</h1>
-          <p class="mkt" id="mkt-status"></p>
-        </div>
-        <button class="ibtn" id="stocks-refresh" type="button" aria-label="Refresh prices" title="Refresh">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"></path><path d="M20 4v4.5h-4.5"></path></svg>
-        </button>
-      </header>
-
-      <section class="setup" id="stocks-setup">
-        <h2 id="setup-title">Connect live prices</h2>
-        <p class="setup-p" id="key-broken" hidden>Finnhub stopped accepting your saved key. Paste a fresh one below.</p>
-        <p class="setup-p">Tangent gets prices, company news and earnings dates from Finnhub. Their free plan is enough, and the key takes about two minutes to get.</p>
-        <ol class="steps">
-          <li><span>Create a free account at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>.</span></li>
-          <li><span>Copy the API key shown on your Finnhub dashboard.</span></li>
-          <li><span>Paste it here and tap Connect.</span></li>
-        </ol>
-        <form class="ask" id="key-form" autocomplete="off">
-          <input id="key-input" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your Finnhub key" aria-label="Finnhub API key">
-          <button class="go" id="key-go" type="submit">Connect</button>
-        </form>
-        <p class="fine" id="key-msg">Your key stays on this phone. Tangent only sends it to Finnhub.</p>
-      </section>
-
-      <div id="stocks-live">
-        <section class="sum" id="stocks-summary" hidden></section>
-      </div>
-
-      <div class="wl-head">
-        <div>
-          <h2>Watchlist</h2>
-          <small id="wl-count"></small>
-        </div>
-        <div class="seg" id="wl-sort" role="group" aria-label="Sort watchlist">
-          <button type="button" data-sort="moves">Moves</button>
-          <button type="button" data-sort="az">A–Z</button>
-          <button type="button" data-sort="mine">Mine</button>
-        </div>
-      </div>
-      <ul class="wl" id="wl"></ul>
-      <button class="wl-add" id="wl-add" type="button">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
-        Add a stock
+      <button class="ibtn" id="install" type="button" aria-label="Add Tangent to your home screen" title="Install" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5 12 15.5 17 10.5M5 20h14"></path></svg>
       </button>
-
-      <section class="earn-sec" id="earn-sec" hidden>
-        <h2>Earnings coming up</h2>
-        <ul class="earn-list" id="earn-list"></ul>
-      </section>
-
-      <div class="key-row" id="key-row" hidden>
-        <span>Live data from Finnhub</span>
-        <button type="button" id="key-change">Change key</button>
-        <button type="button" id="key-remove">Remove key</button>
-      </div>
-      <p class="about">Prices can lag a little. This is for keeping an eye on your stocks and learning how markets work, not investment advice.</p>
+      <button class="ibtn" id="refresh" type="button" aria-label="Refresh prices" title="Refresh">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"></path><path d="M20 4v4.5h-4.5"></path></svg>
+      </button>
     </div>
-  </section>
+  </header>
 
-  <!-- Learn: lessons, review, daily quiz -->
-  <section class="screen learn" id="screen-learn" aria-label="Learn" hidden>
-    <div class="pane-scroll" id="learn-scroll">
-      <header class="learn-head">
-        <h1>Learn</h1>
-        <p id="learn-sub">Short visual lessons, built from Wikipedia.</p>
-      </header>
-      <div class="today-row">
-        <button class="daily" id="btn-review" type="button" style="--h: 150">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7"></path><path d="M4 4v4.5h4.5"></path></svg>
-          <b>Review</b>
-          <span id="rev-sub">Like or save cards to start</span>
-        </button>
-        <button class="daily" id="btn-quiz" type="button" style="--h: 55">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8"></path><circle cx="12" cy="17.2" r=".9" fill="currentColor"></circle></svg>
-          <b>Daily quiz</b>
-          <span id="quiz-sub">5 questions from today</span>
-        </button>
+  <main class="scroll" id="main">
+    <section class="card setup" id="setup" hidden>
+      <h2>Connect live prices</h2>
+      <p class="muted" id="key-broken" hidden>Finnhub stopped accepting your saved key. Paste a fresh one below.</p>
+      <p class="muted">Prices come from Finnhub. Their free plan is enough, and getting a key takes about two minutes.</p>
+      <ol class="steps">
+        <li><span>Create a free account at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>.</span></li>
+        <li><span>Copy the API key on your Finnhub dashboard.</span></li>
+        <li><span>Paste it here and tap Connect.</span></li>
+      </ol>
+      <form class="ask" id="key-form" autocomplete="off">
+        <input id="key-input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your Finnhub key" aria-label="Finnhub API key">
+        <button class="go" id="key-go" type="submit">Connect</button>
+      </form>
+      <p class="fine" id="key-msg">Your key stays on this phone. Tangent only sends it to Finnhub.</p>
+    </section>
+
+    <section class="card sum" id="sum" hidden>
+      <h2 id="sum-h"></h2>
+      <p class="muted" id="sum-p"></p>
+      <div class="mv" id="mv"></div>
+    </section>
+
+    <div class="wl-head">
+      <div>
+        <h2>Watchlist</h2>
+        <small id="wl-count"></small>
       </div>
-      <section id="continue-sec" class="shelf-sec" hidden>
-        <h2 class="shelf-title">Continue</h2>
-        <div class="shelf" id="continue-shelf"></div>
-      </section>
-      <section class="shelf-sec">
-        <h2 class="shelf-title">Today's lesson</h2>
-        <div class="hero-wrap" id="today-lesson"></div>
-      </section>
-      <div id="collections"></div>
-      <p class="about">Lessons are built live from the full Wikipedia article: its sections become cards, its own pictures illustrate them, and the quiz questions come straight from the text.</p>
+      <div class="seg" id="sort" role="group" aria-label="Sort">
+        <button type="button" data-sort="moves">Moves</button>
+        <button type="button" data-sort="az">A–Z</button>
+        <button type="button" data-sort="mine">Mine</button>
+      </div>
     </div>
-  </section>
+    <ul class="wl" id="wl"></ul>
+    <button class="wl-add" id="add" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+      Add a stock
+    </button>
 
-  <!-- You: profile -->
-  <section class="screen you" id="screen-you" aria-label="You" hidden>
-    <div class="pane-scroll" id="you-scroll">
-      <div class="profile">
-        <div class="p-row">
-          <span class="p-ava" aria-hidden="true">
-            <span class="in">
-              <svg width="44" height="44" viewBox="0 0 28 28"><circle cx="13" cy="15" r="8" fill="none" stroke="currentColor" stroke-width="2.4"></circle><path d="M1 9 L25 4.75" stroke="var(--accent)" stroke-width="2.4" stroke-linecap="round"></path><circle cx="11.6" cy="7.1" r="2.5" fill="var(--accent)"></circle></svg>
-            </span>
-          </span>
-          <div class="stats">
-            <div><b id="stat-read">0</b><span>read</span></div>
-            <div><b id="stat-lessons">0</b><span>lessons</span></div>
-            <div><b id="stat-streak">0</b><span>day streak</span></div>
-          </div>
-        </div>
-        <div>
-          <div class="p-name">Tangent</div>
-          <p class="p-bio" id="p-bio"></p>
-        </div>
-        <div class="p-actions">
-          <button class="pbtn" id="you-install" type="button">Install app</button>
-          <button class="pbtn" id="you-explore" type="button">Find topics</button>
-        </div>
-        <div class="following" id="following"></div>
-      </div>
-      <div class="gtabs" role="tablist">
-        <button class="gtab" id="gtab-saved" role="tab" aria-selected="true" type="button" aria-label="Saved">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
-        </button>
-        <button class="gtab" id="gtab-liked" role="tab" aria-selected="false" type="button" aria-label="Liked">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 20.5s-7.2-4.4-9.3-8.9C1.3 8.4 3.3 4.8 6.9 4.8c2.2 0 3.7 1.2 5.1 3.1 1.4-1.9 2.9-3.1 5.1-3.1 3.6 0 5.6 3.6 4.2 6.8-2.1 4.5-9.3 8.9-9.3 8.9z"></path></svg>
-        </button>
-        <button class="gtab" id="gtab-lessons" role="tab" aria-selected="false" type="button" aria-label="Finished lessons">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
-        </button>
-      </div>
-      <div class="grid" id="ygrid"></div>
-      <p class="grid-empty" id="ygrid-empty" hidden></p>
-      <p class="about">Articles come live from Wikipedia under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>. Tangent is free, has no ads or account, isn't made by Wikipedia, and keeps your likes and saves on this phone only.</p>
+    <div class="key-row" id="key-row" hidden>
+      <span id="feed-state">Prices from Finnhub</span>
+      <button type="button" id="key-change">Change key</button>
+      <button type="button" id="key-remove">Remove key</button>
     </div>
-  </section>
-
-  <nav class="bottom-nav" id="bottom-nav" aria-label="Main">
-    <button class="nav-btn" data-tab="home" type="button" aria-label="Home" aria-current="page">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path class="fillable" d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"></path></svg>
-    </button>
-    <button class="nav-btn" data-tab="explore" type="button" aria-label="Explore">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="thick" cx="10.5" cy="10.5" r="6.5"></circle><path class="thick" d="M15.5 15.5 20.5 20.5"></path></svg>
-    </button>
-    <button class="nav-btn" data-tab="stocks" type="button" aria-label="Stocks">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v18M17 3v18"></path><rect class="fillable" x="4.5" y="7" width="5" height="8" rx="1"></rect><rect class="fillable" x="14.5" y="5" width="5" height="10" rx="1"></rect></svg>
-    </button>
-    <button class="nav-btn" data-tab="learn" type="button" aria-label="Learn">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="fillable" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
-      <span class="nav-badge" id="learn-badge" hidden>0</span>
-    </button>
-    <button class="nav-btn" data-tab="you" type="button" aria-label="You">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle class="fillable" cx="12" cy="8.5" r="3.8"></circle><path class="fillable" d="M4.5 20.5c1.2-3.6 4-5.5 7.5-5.5s6.3 1.9 7.5 5.5z"></path></svg>
-    </button>
-  </nav>
+    <p class="about">Tap a change pill to switch between percent and dollars. Prices can lag a little and this isn't investment advice.</p>
+  </main>
 </div>
 
-<!-- Post viewer (opened from grids, search, saved) -->
-<div class="viewer" id="viewer" hidden>
-  <header class="viewer-top">
-    <button class="back" id="viewer-back" type="button" aria-label="Back">
+<!-- Price page -->
+<div class="page" id="page" hidden>
+  <header class="pg-top">
+    <button class="back" id="pg-back" type="button" aria-label="Back">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
     </button>
-    <span class="viewer-title" id="viewer-title"></span>
+    <div class="pg-head" id="pg-head"></div>
   </header>
-  <div class="feed" id="viewer-feed" tabindex="-1"></div>
-</div>
-
-<!-- Stories -->
-<div class="story" id="story" hidden>
-  <div class="st-stage" id="st-stage"></div>
-  <div class="st-bars" id="st-bars"></div>
-  <div class="st-head">
-    <span class="st-ava" id="st-ava"></span>
-    <b id="st-name"></b>
-    <span class="st-when" id="st-when"></span>
-    <button class="st-x" id="st-close" type="button" aria-label="Close story">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-    </button>
-  </div>
-  <div class="st-foot">
-    <button class="readpill primary" id="st-learn" type="button"><span>Learn this</span></button>
-    <a class="readpill icon" id="st-read" href="#" target="_blank" rel="noopener" aria-label="Read on Wikipedia">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
-    </a>
-    <button class="rb like st-like" id="st-like" type="button" aria-label="Like" aria-pressed="false"></button>
-    <button class="rb" id="st-share" type="button" aria-label="Share"></button>
-  </div>
-</div>
-
-<!-- Stock page -->
-<div class="stock" id="stock" hidden>
-  <header class="sk-top">
-    <button class="back" id="sk-back" type="button" aria-label="Back">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
-    </button>
-    <div class="sk-head" id="sk-head"></div>
-  </header>
-  <div class="pane-scroll sk-body" id="sk-body"></div>
+  <div class="scroll pg-body" id="pg-body"></div>
 </div>
 
 <!-- Add a stock -->
@@ -278,7 +107,7 @@
       </button>
     </div>
     <form class="ask" id="add-form" autocomplete="off">
-      <input id="add-input" type="search" placeholder="Company or ticker, e.g. Snowflake" aria-label="Company or ticker" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+      <input id="add-input" type="search" placeholder="Company or ticker" aria-label="Company or ticker" autocapitalize="off" spellcheck="false" enterkeyhint="search">
       <button class="go" type="submit">Search</button>
     </form>
     <p class="fine" id="add-msg"></p>
@@ -286,24 +115,7 @@
   </section>
 </div>
 
-<!-- Lesson reader -->
-<div class="lesson" id="lesson" hidden>
-  <div class="ls-top">
-    <div class="ls-bars" id="ls-bars"></div>
-    <div class="ls-row">
-      <span class="ls-badge" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"></path><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"></path></svg>
-      </span>
-      <span class="ls-title" id="ls-title"></span>
-      <button class="ls-x" id="ls-close" type="button" aria-label="Close lesson">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-      </button>
-    </div>
-  </div>
-  <div class="ls-stage" id="ls-stage"></div>
-</div>
-
-<!-- Install sheet -->
+<!-- Install -->
 <div class="scrim" id="install-sheet" hidden>
   <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="install-title">
     <div class="sheet-head">
@@ -317,7 +129,7 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<noscript><p style="padding: 24px; color: #fff;">Tangent needs JavaScript to load articles.</p></noscript>
+<noscript><p style="padding: 24px; color: #fff;">Tangent needs JavaScript to load prices.</p></noscript>
 <script src="app.js" defer></script>
 </body>
 </html>

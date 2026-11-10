@@ -1,6 +1,7 @@
-/* Tangent service worker: keeps the app itself available offline and remembers the last Wikipedia responses. */
-const VERSION = "tangent-v3";
-const API_CACHE = "tangent-api";
+/* Tangent service worker: keeps the app itself available offline and remembers company logos.
+   Prices are never cached here; the app keeps the last prices it saw on its own. */
+const VERSION = "tangent-v4";
+const LOGOS = "tangent-logos";
 const SHELL = [
   "./",
   "./index.html",
@@ -26,7 +27,7 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k !== API_CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k !== LOGOS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -47,29 +48,16 @@ async function shellFirstNetwork(req) {
   }
 }
 
-async function cacheFirst(req) {
-  const cache = await caches.open(VERSION);
+async function cacheFirst(name, req, max) {
+  const cache = await caches.open(name);
   const hit = await cache.match(req);
   if (hit) return hit;
   const res = await fetch(req);
-  if (res && res.ok) cache.put(req, res.clone());
-  return res;
-}
-
-async function apiNetworkFirst(req) {
-  const cache = await caches.open(API_CACHE);
-  try {
-    const res = await fetch(req);
-    if (res && res.ok) {
-      await cache.put(req, res.clone());
-      trim(cache, 80);
-    }
-    return res;
-  } catch (e) {
-    const hit = await cache.match(req);
-    if (hit) return hit;
-    throw e;
+  if (res && (res.ok || res.type === "opaque")) {
+    await cache.put(req, res.clone());
+    if (max) trim(cache, max);
   }
+  return res;
 }
 
 async function trim(cache, max) {
@@ -82,11 +70,11 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin === self.location.origin) {
-    if (/\/(fonts|icons)\//.test(url.pathname)) e.respondWith(cacheFirst(req));
+    if (/\/(fonts|icons)\//.test(url.pathname)) e.respondWith(cacheFirst(VERSION, req));
     else e.respondWith(shellFirstNetwork(req));
     return;
   }
-  if (url.hostname === "en.wikipedia.org" || url.hostname === "api.wikimedia.org") {
-    e.respondWith(apiNetworkFirst(req));
+  if (url.hostname === "static2.finnhub.io" || url.hostname === "static.finnhub.io") {
+    e.respondWith(cacheFirst(LOGOS, req, 80));
   }
 });

@@ -1,7 +1,7 @@
 {
   "name": "Tangent",
   "short_name": "Tangent",
-  "description": "Swipe through today's Wikipedia instead of doomscrolling: the news, what everyone is reading, on this day, and random rabbit holes.",
+  "description": "Live prices for the stocks you follow.",
   "id": "./",
   "start_url": "./",
   "scope": "./",
@@ -9,10 +9,28 @@
   "orientation": "portrait",
   "background_color": "#0b0a10",
   "theme_color": "#0b0a10",
-  "categories": ["education", "books", "news"],
+  "categories": [
+    "finance",
+    "business"
+  ],
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
