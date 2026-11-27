@@ -392,21 +392,23 @@
   let tickRaf = 0, lastSave = 0, lastSummary = 0;
   function onTrades(list) {
     const latest = new Map();
-    for (const t of list) {
-      if (!t || typeof t.s !== "string" || !Number.isFinite(t.p) || t.p <= 0) continue;
-      const prev = latest.get(t.s);
-      if (!prev || (t.t || 0) >= (prev.t || 0)) latest.set(t.s, t);
+    const now = Date.now();
+    // Every trade counts for the day's high and low and for the chart; the newest one sets the price.
+    for (const t of list.filter((t) => t && typeof t.s === "string" && Number.isFinite(t.p) && t.p > 0).sort((a, b) => (a.t || 0) - (b.t || 0))) {
+      const q = quotes.get(t.s);
+      if (!q || !(q.pc > 0)) continue;
+      q.h = Math.max(q.h || t.p, t.p);
+      q.l = q.l > 0 ? Math.min(q.l, t.p) : t.p;
+      record(t.s, t.t || now, t.p);
+      latest.set(t.s, t);
     }
     for (const [s, t] of latest) {
       const q = quotes.get(s);
-      if (!q || !(q.pc > 0)) continue;
       const before = q.c;
       q.c = t.p;
       q.d = t.p - q.pc;
       q.dp = (q.d / q.pc) * 100;
-      { q.h = Math.max(q.h || t.p, t.p); q.l = q.l > 0 ? Math.min(q.l, t.p) : t.p; }
       if (t.t) q.t = Math.floor(t.t / 1000);
-      record(s, t.t || Date.now(), t.p);
       const dir = t.p > before ? 1 : t.p < before ? -1 : 0;
       if (dir || !ticks.has(s)) ticks.set(s, dir);
     }

@@ -78,3 +78,16 @@ test("a quote refresh anchors the chart at the open", async ({ page, finnhub }) 
   const pts = await page.evaluate(() => window.__tangent.hist["2026-11-25"].AAPL);
   expect(pts).toEqual([[570, 197], [690, 200]]);
 });
+
+test("one frame with many trades records every minute and the high in the middle", async ({ page }) => {
+  await openApp(page);
+  await expect.poll(() => page.evaluate(() => !!(window.__fakeWS.open() && window.__fakeWS.subs.size))).toBe(true);
+  // Out of order on purpose; the 230 spike is neither first nor last.
+  await page.evaluate((ts) => window.__fakeWS.push([
+    { s: "AAPL", p: 201, t: ts[2] }, { s: "AAPL", p: 230, t: ts[1] }, { s: "AAPL", p: 199, t: ts[0] }
+  ]), [nyWed(10, 0), nyWed(10, 1), nyWed(10, 2)]);
+  await expect(page.locator('#wl .px[data-px="AAPL"]')).toHaveText("$201.00");
+  const q = await page.evaluate(() => window.__tangent.quotes.get("AAPL"));
+  expect(q.h).toBe(230);
+  expect(await page.evaluate(() => window.__tangent.hist["2026-11-25"].AAPL)).toEqual([[600, 199], [601, 230], [602, 201]]);
+});
