@@ -18,12 +18,12 @@
   const asArr = (v) => (Array.isArray(v) ? v : []);
   const asObj = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 
+  const MAX_WATCH = 40;
   const storedWatch = store.get("watch", null);
   let watch = (Array.isArray(storedWatch) ? storedWatch : DEFAULT_WATCH)
     .filter((w) => w && typeof w.sym === "string" && typeof w.name === "string")
     .map((w) => ({ sym: w.sym, name: w.name }))
-    .slice(0, 40);
-  const MAX_WATCH = 40;
+    .slice(0, MAX_WATCH);
   const saveWatch = () => store.set("watch", watch);
   const watchOf = (sym) => watch.find((w) => w.sym === sym) || null;
   const getKey = () => { const k = store.get("fhkey", ""); return typeof k === "string" ? k.trim() : ""; };
@@ -47,14 +47,33 @@
   }
   const initials = (name) => String(name || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]).join("").toUpperCase() || "?";
 
-  const toast = $("toast");
-  let toastTimer = null;
-  function showToast(msg, ms) {
+  /* Toasts. An optional action adds a button (Undo, Reload). A sticky toast (the update offer)
+     comes back after any other toast has gone. */
+  const toast = $("toast"), toastMsg = $("toast-msg"), toastAct = $("toast-act");
+  let toastTimer = null, toastAction = null, stickyToast = null;
+  function showToast(msg, ms, action) {
     clearTimeout(toastTimer);
-    toast.textContent = msg;
+    toastMsg.textContent = msg;
+    toastAction = action || null;
+    toastAct.hidden = !action;
+    toastAct.textContent = action ? action.label : "";
+    toast.classList.toggle("has-act", !!action);
     toast.hidden = false;
-    toastTimer = setTimeout(() => { toast.hidden = true; }, ms || 2000);
+    if (ms === Infinity) return;
+    toastTimer = setTimeout(hideToast, ms || (action ? 5000 : 2000));
   }
+  function hideToast() {
+    clearTimeout(toastTimer);
+    toast.hidden = true;
+    toastAction = null;
+    if (stickyToast) showToast(stickyToast.msg, Infinity, stickyToast.action);
+  }
+  toastAct.addEventListener("click", () => {
+    const a = toastAction;
+    if (stickyToast && stickyToast.action === a) stickyToast = null;
+    hideToast();
+    if (a) a.run();
+  });
 
   /* ======================= Finnhub requests ======================= */
   function fhError(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
@@ -321,8 +340,10 @@
     tickRaf = 0;
     const now = Date.now();
     for (const [s, dir] of ticks) {
+      const q = quotes.get(s);
+      if (!q) continue;
       document.querySelectorAll('.px[data-px="' + esc(s) + '"]').forEach((n) => {
-        n.textContent = usd(quotes.get(s).c);
+        n.textContent = usd(q.c);
         if (dir && !reduced) {
           n.classList.remove("tick-up", "tick-down");
           void n.offsetWidth;
@@ -466,28 +487,134 @@
     else if (sortMode === "moves") list.sort((a, b) => (dpOf(b.sym) ?? -1e9) - (dpOf(a.sym) ?? -1e9));
     return list;
   }
+  /* Rows are kept per symbol and only repainted, so a refresh doesn't rebuild logos or flicker. */
+  const rows = new Map();
+  const GRIP_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg>';
+  function makeRow(w) {
+    const li = el("li");
+    li.dataset.sym = w.sym;
+    const grip = el("button", "wl-grip");
+    grip.type = "button";
+    grip.innerHTML = GRIP_ICON;
+    grip.setAttribute("aria-label", "Move " + w.sym + ". Drag, or use the up and down arrow keys.");
+    grip.addEventListener("pointerdown", (e) => startDrag(e, li));
+    grip.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const from = watch.findIndex((x) => x.sym === w.sym);
+      moveStock(from, from + (e.key === "ArrowUp" ? -1 : 1), true);
+    });
+    const row = el("button", "wl-row");
+    row.type = "button";
+    const logo = el("span", "logo");
+    logoInto(logo, w.sym);
+    const id = el("span", "wl-id");
+    id.append(el("b", null, w.sym), el("small", null, w.name));
+    row.append(logo, id, rangeBar(w.sym, "day"));
+    row.setAttribute("aria-label", w.name + ", open price page");
+    row.addEventListener("click", () => openPage(w.sym));
+    const px = el("div", "wl-px");
+    px.append(pxEl(w.sym), pill(w.sym));
+    px.addEventListener("click", () => openPage(w.sym));
+    li.append(grip, row, px);
+    return li;
+  }
+  function paintRow(li) {
+    const sym = li.dataset.sym;
+    const q = quotes.get(sym);
+    li.querySelectorAll(".px").forEach((n) => { n.textContent = q ? usd(q.c) : "–"; });
+    li.querySelectorAll(".chg").forEach(paintPill);
+    li.querySelectorAll(".rng").forEach(paintRange);
+    const logo = li.querySelector(".logo");
+    if (logo && !logo.classList.contains("has-logo") && (cachedProfile(sym) || {}).logo) logoInto(logo, sym);
+  }
   function renderList() {
     document.querySelectorAll("#sort button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.sort === sortMode ? "true" : "false"));
     const ul = $("wl");
-    ul.textContent = "";
-    for (const w of sorted()) {
-      const li = el("li");
-      const row = el("button", "wl-row");
-      row.type = "button";
-      const logo = el("span", "logo");
-      logoInto(logo, w.sym);
-      const id = el("span", "wl-id");
-      id.append(el("b", null, w.sym), el("small", null, w.name));
-      row.append(logo, id, rangeBar(w.sym, "day"));
-      row.setAttribute("aria-label", w.name + ", open price page");
-      row.addEventListener("click", () => openPage(w.sym));
-      const px = el("div", "wl-px");
-      px.append(pxEl(w.sym), pill(w.sym));
-      px.addEventListener("click", () => openPage(w.sym));
-      li.append(row, px);
-      ul.append(li);
-    }
+    ul.classList.toggle("reorder", sortMode === "mine" && watch.length > 1);
+    const list = sorted();
+    const keep = new Set(list.map((w) => w.sym));
+    for (const [s, li] of rows) if (!keep.has(s)) { li.remove(); rows.delete(s); }
+    const focused = document.activeElement;
+    list.forEach((w, i) => {
+      let li = rows.get(w.sym);
+      if (!li) { li = makeRow(w); rows.set(w.sym, li); }
+      else paintRow(li);
+      if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] || null);
+    });
+    // Moving a node can drop focus; put it back (keyboard reordering relies on this).
+    if (focused && focused !== document.activeElement && ul.contains(focused)) focused.focus({ preventScroll: true });
     $("wl-count").textContent = watch.length + (watch.length === 1 ? " stock" : " stocks");
+  }
+
+  /* Reordering, for the "Mine" sort. */
+  function moveStock(from, to, announce) {
+    if (from < 0 || from >= watch.length) return;
+    to = Math.max(0, Math.min(watch.length - 1, to));
+    if (to === from) return;
+    const [w] = watch.splice(from, 1);
+    watch.splice(to, 0, w);
+    saveWatch();
+    renderList();
+    if (announce) showToast(w.sym + " moved to " + (to + 1) + " of " + watch.length, 1400);
+  }
+  function startDrag(e, li) {
+    if (sortMode !== "mine" || (e.pointerType === "mouse" && e.button !== 0)) return;
+    e.preventDefault();
+    const grip = e.currentTarget;
+    try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+    const main = $("main");
+    const items = [...$("wl").children];
+    const from = items.indexOf(li);
+    if (from < 0) return;
+    const scroll0 = main.scrollTop;
+    // Positions in scroll-content coordinates, so autoscrolling while dragging stays correct.
+    const mids = items.map((n) => { const r = n.getBoundingClientRect(); return r.top + scroll0 + r.height / 2; });
+    const h = li.getBoundingClientRect().height;
+    const y0 = e.clientY + scroll0;
+    let lastY = e.clientY, to = from, raf = 0, done = false;
+    li.classList.add("dragging");
+    document.body.classList.add("dragging-row");
+    const layout = () => {
+      const dy = lastY + main.scrollTop - y0;
+      li.style.transform = "translateY(" + dy + "px)";
+      const mid = mids[from] + dy;
+      to = from;
+      for (let i = 0; i < items.length; i++) {
+        if (i < from && mid < mids[i]) { to = i; break; }
+      }
+      for (let i = items.length - 1; i > from; i--) {
+        if (mid > mids[i]) { to = i; break; }
+      }
+      items.forEach((n, i) => {
+        if (i === from) return;
+        const shift = from < to && i > from && i <= to ? -h : from > to && i >= to && i < from ? h : 0;
+        n.style.transform = shift ? "translateY(" + shift + "px)" : "";
+      });
+    };
+    const edge = () => {
+      if (done) return;
+      const r = main.getBoundingClientRect();
+      const step = lastY < r.top + 56 ? -10 : lastY > r.bottom - 56 ? 10 : 0;
+      if (step) { main.scrollTop += step; layout(); }
+      raf = requestAnimationFrame(edge);
+    };
+    const move = (ev) => { lastY = ev.clientY; layout(); };
+    const end = () => {
+      done = true;
+      cancelAnimationFrame(raf);
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", end);
+      grip.removeEventListener("pointercancel", end);
+      items.forEach((n) => { n.style.transform = ""; });
+      li.classList.remove("dragging");
+      document.body.classList.remove("dragging-row");
+      moveStock(from, to, false);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+    raf = requestAnimationFrame(edge);
   }
   function render() {
     const has = !!getKey();
@@ -535,7 +662,16 @@
     if (getKey() && Date.now() - quotesAt > 60000) refreshAll(true, true);
     else liveSync();
   });
-  document.querySelectorAll("#sort button").forEach((b) => b.addEventListener("click", () => { sortMode = b.dataset.sort; store.set("wlSort", sortMode); renderList(); }));
+  document.querySelectorAll("#sort button").forEach((b) => b.addEventListener("click", () => {
+    const was = sortMode;
+    sortMode = b.dataset.sort;
+    store.set("wlSort", sortMode);
+    renderList();
+    if (sortMode === "mine" && was !== "mine" && watch.length > 1 && !store.get("toldReorder", false)) {
+      store.set("toldReorder", true);
+      showToast("Drag the handle to put your stocks in order", 2600);
+    }
+  }));
 
   /* ======================= key ======================= */
   async function connectKey(key) {
@@ -594,9 +730,17 @@
   /* ======================= add a stock ======================= */
   const addSheet = $("add-sheet");
   let addTok = 0, addTimer = null;
+  /* US tickers: plain (AAPL), or a share class after a dot (BRK.B, BF.A). Foreign listings come back
+     as AMD.SW, BRKB.MX or BRK.B:XETRA, so a two-letter suffix or a colon means another exchange. */
+  const US_TICKER = /^[A-Z0-9]{1,6}(\.[A-E])?$/;
   async function symbolSearch(q) {
-    const j = await fh("/search", { q }, { ttl: 3600e3, high: true });
-    return asArr(j && j.result).filter((r) => r && r.symbol && !/[.:]/.test(r.symbol) && (!r.type || /common stock|adr|etp|etf|reit/i.test(r.type))).slice(0, 12);
+    const j = await fh("/search", { q, exchange: "US" }, { ttl: 3600e3, high: true });
+    const seen = new Set();
+    return asArr(j && j.result).filter((r) => {
+      if (!r || typeof r.symbol !== "string" || !US_TICKER.test(r.symbol) || seen.has(r.symbol)) return false;
+      seen.add(r.symbol);
+      return !r.type || /common stock|adr|etp|etf|reit/i.test(r.type);
+    }).slice(0, 12);
   }
   function openAdd() {
     if (!getKey()) { showToast("Connect your Finnhub key first."); $("key-input").focus(); return; }
@@ -652,10 +796,22 @@
     fh("/quote", { symbol: sym }, { high: true }).then((q) => { if (q && q.c > 0) { quotes.set(sym, Object.assign({}, q)); saveQuotes(); render(); } }).catch(() => {});
   }
   function removeStock(sym) {
-    watch = watch.filter((w) => w.sym !== sym);
+    const at = watch.findIndex((w) => w.sym === sym);
+    if (at < 0) return;
+    const gone = watch[at];
+    watch.splice(at, 1);
     saveWatch();
-    showToast(sym + " removed");
+    showToast(sym + " removed", 5000, { label: "Undo", run: () => restoreStock(gone, at) });
     render();
+    paintWatchBtn();
+    liveSync();
+  }
+  function restoreStock(w, at) {
+    if (watchOf(w.sym) || watch.length >= MAX_WATCH) return;
+    watch.splice(Math.min(at, watch.length), 0, w);
+    saveWatch();
+    render();
+    paintWatchBtn();
     liveSync();
   }
 
@@ -663,6 +819,13 @@
   const page = $("page");
   let pageSym = null;
   const yearCache = new Map();
+  function paintWatchBtn() {
+    const wb = $("pg-watch");
+    if (!wb || !pageSym || wb.dataset.armed === "1") return;
+    const on = !!watchOf(pageSym);
+    wb.setAttribute("aria-pressed", on ? "true" : "false");
+    wb.textContent = on ? "Watching" : "Watch";
+  }
   function paintPageNumbers() {
     const q = quotes.get(pageSym);
     const ch = $("pg-change");
@@ -702,17 +865,17 @@
     id.append(el("b", null, sym), el("small", null, w.name));
     const wb = el("button", "watchbtn");
     wb.type = "button";
-    const paintWb = () => { const on = !!watchOf(sym); wb.setAttribute("aria-pressed", on ? "true" : "false"); wb.textContent = on ? "Watching" : "Watch"; };
-    paintWb();
+    wb.id = "pg-watch";
     wb.addEventListener("click", () => {
       if (watchOf(sym)) {
-        if (wb.dataset.armed !== "1") { wb.dataset.armed = "1"; wb.textContent = "Tap to remove"; setTimeout(() => { wb.dataset.armed = ""; paintWb(); }, 3500); return; }
+        if (wb.dataset.armed !== "1") { wb.dataset.armed = "1"; wb.textContent = "Tap to remove"; setTimeout(() => { wb.dataset.armed = ""; paintWatchBtn(); }, 3500); return; }
         wb.dataset.armed = "";
         removeStock(sym);
       } else addStock(sym, w.name);
-      paintWb();
+      paintWatchBtn();
     });
     head.append(logo, id, wb);
+    paintWatchBtn();
 
     const body = $("pg-body");
     body.textContent = "";
@@ -799,8 +962,32 @@
   /* ======================= start ======================= */
   render();
   refreshAll(false, true);
+  /* Updates: a new service worker waits until you tap Reload, so the app never swaps under you. */
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
-    window.addEventListener("load", () => { navigator.serviceWorker.register("./sw.js").catch(() => {}); });
+    const sw = navigator.serviceWorker;
+    // Reload only when you tapped Reload, not when the very first worker takes control.
+    let asked = false, reloading = false;
+    sw.addEventListener("controllerchange", () => {
+      if (!asked || reloading) return;
+      reloading = true;
+      location.reload();
+    });
+    const offerUpdate = (w) => {
+      if (!w || !sw.controller || stickyToast) return;
+      stickyToast = { msg: "A new version of Tangent is ready", action: { label: "Reload", run: () => { asked = true; w.postMessage({ type: "skip-waiting" }); } } };
+      if (toast.hidden) showToast(stickyToast.msg, Infinity, stickyToast.action);
+    };
+    window.addEventListener("load", async () => {
+      let reg;
+      try { reg = await sw.register("./sw.js"); } catch (e) { return; }
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.addEventListener("updatefound", () => {
+        const w = reg.installing;
+        if (w) w.addEventListener("statechange", () => { if (w.state === "installed") offerUpdate(w); });
+      });
+      // Installed apps can stay open for days; look for a new version whenever Tangent comes back.
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) reg.update().catch(() => {}); });
+    });
   }
 
   // Hooks for automated tests; harmless in normal use.

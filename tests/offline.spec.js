@@ -15,3 +15,30 @@ test("works offline once the service worker has the app", async ({ page, context
   await expect(page.locator('#wl .px[data-px="AAPL"]')).toHaveText("$200.00");
   await context.setOffline(false);
 });
+
+test("a new version waits for Reload, then takes over", async ({ page, context }) => {
+  // Playwright only routes the first registration fetch, so the installed worker is a doctored
+  // "old version" and update() then finds the real sw.js on disk, which differs.
+  await context.route("**/sw.js", async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, body: (await res.text()) + "\n// old version\n" });
+  });
+  await openApp(page);
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller), { timeout: 10000 }).toBe(true);
+  await expect(page.locator("#toast")).toBeHidden();
+
+  await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
+  await expect(page.locator("#toast-msg")).toHaveText("A new version of Tangent is ready", { timeout: 10000 });
+  // An ordinary toast doesn't lose the offer.
+  await page.locator('#wl .chg[data-sym="AAPL"]').click();
+  await page.locator("#key-remove").click();
+  await page.locator("#key-remove").click();
+  await expect(page.locator("#toast-msg")).toHaveText("Key removed from this phone");
+  await expect(page.locator("#toast-msg")).toHaveText("A new version of Tangent is ready", { timeout: 5000 });
+
+  const reloaded = page.waitForEvent("load");
+  await page.locator("#toast-act").click();
+  await reloaded;
+  await expect(page.locator("h1")).toHaveText("Tangent");
+  expect(await page.evaluate(async () => !(await navigator.serviceWorker.getRegistration()).waiting)).toBe(true);
+});
