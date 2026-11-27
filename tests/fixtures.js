@@ -4,6 +4,8 @@ const base = require("@playwright/test");
 
 const KEY = "test-key-123";
 const NOW_S = () => Math.floor(Date.now() / 1000);
+/** Milliseconds for a New York wall-clock time on Wed Nov 25 2026 (EST, UTC−5). */
+const nyWed = (h, m) => Date.UTC(2026, 10, 25, h + 5, m);
 
 const QUOTES = {
   AAPL: { c: 200, d: 2, dp: 1.0101, h: 205, l: 195, o: 197, pc: 198 },
@@ -36,6 +38,9 @@ function makeFinnhub() {
     rateLimit: false,
     down: false,
     quotes: JSON.parse(JSON.stringify(QUOTES)),
+    // Quote timestamps: a fixed after-hours moment (Tue Nov 24 2026, 5:30 PM New York), so nothing
+    // depends on when the tests run. Chart tests push trades with their own times.
+    quoteT: Date.parse("2026-11-24T22:30:00Z") / 1000,
     calls: []
   };
 }
@@ -53,7 +58,7 @@ async function routeFinnhub(context, fh) {
     switch (path) {
       case "/quote": {
         const q = fh.quotes[sym] || { c: 50, d: 0.5, dp: 1.0101, h: 51, l: 49, o: 49.5, pc: 49.5 };
-        return json({ ...q, t: NOW_S() });
+        return json({ ...q, t: fh.quoteT });
       }
       case "/stock/market-status":
         return json({ exchange: "US", holiday: null, isOpen: fh.open, session: fh.open ? "regular" : null, timezone: "America/New_York", t: NOW_S() });
@@ -136,4 +141,4 @@ async function openApp(page) {
   await base.expect(page.locator('#wl .px[data-px="AAPL"]')).toHaveText("$200.00");
 }
 
-module.exports = { test, expect: base.expect, openApp, KEY, QUOTES, SEED_WATCH };
+module.exports = { test, expect: base.expect, openApp, nyWed, KEY, QUOTES, SEED_WATCH };

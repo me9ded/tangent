@@ -240,7 +240,32 @@ a { color: inherit; }
 .px.tick-up { background: oklch(0.8 0.16 150 / 0.28); transition: none; }
 .px.tick-down { background: oklch(0.72 0.17 25 / 0.3); transition: none; }
 @media (prefers-reduced-motion: reduce) { .px, .px.tick-up, .px.tick-down { transition: none; background: none; } }
-@media (max-width: 370px) { .wl-row { grid-template-columns: 40px minmax(0, 1fr); } .wl-row .rng { display: none; } }
+@media (max-width: 370px) { .wl-row { grid-template-columns: 40px minmax(0, 1fr); } .wl-row .viz { display: none; } }
+
+/* row sparkline (once a day has enough points) and price page chart */
+.viz { min-width: 0; display: grid; align-items: center; }
+.spark { display: block; width: 64px; height: 22px; overflow: visible; color: var(--dim); }
+.spark.up, .chart.up { color: var(--up); }
+.spark.down, .chart.down { color: var(--down); }
+.spark path, .chart path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.spark .ln { stroke: currentColor; stroke-width: 1.6; }
+.spark .gap { stroke: currentColor; stroke-width: 1.2; stroke-dasharray: 2 3; opacity: 0.6; }
+.spark .base { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 1 3; }
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-height: 1.2em; }
+.chart-read { font-family: var(--mono); font-size: 0.82rem; font-variant-numeric: tabular-nums; color: var(--ink); }
+.chart { position: relative; height: 168px; color: var(--dim); touch-action: pan-y; cursor: crosshair; }
+.chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chart.empty { height: 64px; border: 1.5px dashed var(--line); border-radius: 14px; cursor: default; }
+.chart .ln { stroke: currentColor; stroke-width: 2; }
+.chart .gap { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 3 5; opacity: 0.55; }
+.chart .area { fill: currentColor; stroke: none; opacity: 0.1; }
+.chart .base { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 2 4; }
+.chart .cursor { stroke: var(--faint); stroke-width: 1; }
+.chart .dot { fill: currentColor; stroke: var(--bg); stroke-width: 2.5; }
+.chart-axis { position: relative; height: 1.1em; color: var(--faint); font-family: var(--mono); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+.chart-axis span { position: absolute; top: 0; transform: translateX(-50%); }
+.chart-axis span:first-child { transform: none; }
+.chart-axis span:last-child { transform: translateX(-100%); }
 
 /* reordering ("Mine" sort) */
 .wl li { position: relative; background: var(--bg); }

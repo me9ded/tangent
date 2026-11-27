@@ -8,6 +8,8 @@ module.exports = defineConfig({
   testMatch: "*.spec.js",
   fullyParallel: true,
   retries: process.env.CI ? 1 : 0,
+  // A stuck browser should fail the run, not hold CI for hours.
+  globalTimeout: 10 * 60 * 1000,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: `http://127.0.0.1:${PORT}/`,

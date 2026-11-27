@@ -170,6 +170,7 @@
   function saveQuotes() {
     store.set("lastQuotes", Object.fromEntries([...quotes].filter(([s]) => watchOf(s))));
     store.set("lastQuotesAt", quotesAt);
+    saveHist();
   }
   function refreshQuotes(force) {
     if (!getKey()) return Promise.resolve(quotes);
@@ -181,7 +182,7 @@
       for (const r of res) {
         if (r.status === "fulfilled") {
           const [s, q] = r.value;
-          if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, Object.assign({}, q)); ok++; }
+          if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, Object.assign({}, q)); recordQuote(s, q); ok++; }
         } else { lastErr = r.reason; if (r.reason && r.reason.code === "badkey") bad = true; }
       }
       keyBroken = bad && !ok;
@@ -195,11 +196,21 @@
   const dpOf = (sym) => { const q = quotes.get(sym); return q && Number.isFinite(q.dp) ? q.dp : null; };
 
   /* market hours */
-  function nyClock() {
-    const parts = {};
-    for (const p of new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(new Date())) parts[p.type] = p.value;
-    return { wd: parts.weekday, min: (Number(parts.hour) % 24) * 60 + Number(parts.minute) };
+  const nyFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "numeric", minute: "numeric", hour12: false });
+  const nyMemo = new Map();
+  /* New York date, weekday and minute of the day for a timestamp (memoized per minute: trades arrive fast). */
+  function nyParts(ms) {
+    const key = Math.floor(ms / 60000);
+    let r = nyMemo.get(key);
+    if (r) return r;
+    const p = {};
+    for (const x of nyFmt.formatToParts(new Date(key * 60000))) p[x.type] = x.value;
+    r = { day: p.year + "-" + p.month + "-" + p.day, wd: p.weekday, min: (Number(p.hour) % 24) * 60 + Number(p.minute) };
+    if (nyMemo.size > 8) nyMemo.clear();
+    nyMemo.set(key, r);
+    return r;
   }
+  const nyClock = () => nyParts(Date.now());
   function clockStatus() {
     const { wd, min } = nyClock();
     if (wd === "Sat" || wd === "Sun") return { open: false, session: null };
@@ -224,6 +235,72 @@
     if (mstatus.session === "post-market") return "After hours";
     return mstatus.holiday ? "Closed for " + mstatus.holiday : "Market closed";
   }
+
+  /* ======================= today's chart, recorded on this phone ======================= */
+  /* Finnhub's free plan has no intraday candles, so Tangent keeps its own: the last price in each
+     minute of the regular session (9:30 to 4:00 New York time), from live trades and quote refreshes.
+     Only the two most recent trading days are kept. */
+  const OPEN_MIN = 570, CLOSE_MIN = 960;
+  const hist = (() => {
+    const out = {};
+    for (const [day, syms] of Object.entries(asObj(store.get("hist", {})))) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      const d = {};
+      for (const [s, pts] of Object.entries(asObj(syms))) {
+        const ok = asArr(pts).filter((x) => Array.isArray(x) && Number.isInteger(x[0]) && x[0] >= OPEN_MIN && x[0] <= CLOSE_MIN && x[1] > 0);
+        if (ok.length) d[s] = ok;
+      }
+      out[day] = d;
+    }
+    return out;
+  })();
+  let histDirty = false;
+  function recordAt(sym, day, min, price, keepExisting) {
+    const d = hist[day] || (hist[day] = {});
+    const pts = d[sym] || (d[sym] = []);
+    const p = Math.round(price * 1e4) / 1e4;
+    let i = pts.length - 1;
+    while (i >= 0 && pts[i][0] > min) i--;
+    if (i >= 0 && pts[i][0] === min) { if (keepExisting || pts[i][1] === p) return; pts[i][1] = p; }
+    else pts.splice(i + 1, 0, [min, p]);
+    histDirty = true;
+    const days = Object.keys(hist).sort();
+    for (const old of days.slice(0, -2)) delete hist[old];
+  }
+  function record(sym, ms, price) {
+    if (!(price > 0) || !Number.isFinite(ms)) return;
+    const { day, wd, min } = nyParts(ms);
+    if (wd === "Sat" || wd === "Sun" || min < OPEN_MIN || min > CLOSE_MIN) return;
+    recordAt(sym, day, min, price);
+  }
+  /* A quote gives the latest price and the day's open, which anchors the chart at 9:30. */
+  function recordQuote(sym, q) {
+    if (!q || !(q.t > 0)) return;
+    const { day, wd, min } = nyParts(q.t * 1000);
+    if (wd === "Sat" || wd === "Sun" || min < OPEN_MIN) return;
+    if (q.o > 0) recordAt(sym, day, OPEN_MIN, q.o, true);
+    record(sym, q.t * 1000, q.c);
+  }
+  function saveHist() {
+    if (!histDirty) return;
+    histDirty = false;
+    const out = {};
+    for (const [day, syms] of Object.entries(hist)) {
+      out[day] = {};
+      for (const [s, pts] of Object.entries(syms)) if (watchOf(s)) out[day][s] = pts;
+    }
+    store.set("hist", out);
+  }
+  /* The most recent recorded day for a stock: today while the market trades, else the last session. */
+  function series(sym) {
+    for (const day of Object.keys(hist).sort().reverse()) {
+      const pts = hist[day][sym];
+      if (pts && pts.length) return { day, pts };
+    }
+    return null;
+  }
+  const minLabel = (min) => { const h = Math.floor(min / 60), m = min % 60; return ((h + 11) % 12 + 1) + ":" + String(m).padStart(2, "0") + (h < 12 ? " AM" : " PM"); };
+  const dayLabel = (day) => day === nyClock().day ? "Today" : new Date(day + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 
   /* logos */
   function profile(sym, high) { return fh("/stock/profile2", { symbol: sym }, { ttl: 7 * 864e5, persist: true, high }); }
@@ -329,6 +406,7 @@
       q.dp = (q.d / q.pc) * 100;
       { q.h = Math.max(q.h || t.p, t.p); q.l = q.l > 0 ? Math.min(q.l, t.p) : t.p; }
       if (t.t) q.t = Math.floor(t.t / 1000);
+      record(s, t.t || Date.now(), t.p);
       const dir = t.p > before ? 1 : t.p < before ? -1 : 0;
       if (dir || !ticks.has(s)) ticks.set(s, dir);
     }
@@ -354,6 +432,7 @@
       });
       document.querySelectorAll('.chg[data-sym="' + esc(s) + '"]').forEach(paintPill);
       document.querySelectorAll('.rng[data-sym="' + esc(s) + '"]').forEach(paintRange);
+      document.querySelectorAll('.viz[data-sym="' + esc(s) + '"]').forEach(paintViz);
     }
     ticks.clear();
     if (pageSym) paintPageNumbers();
@@ -437,6 +516,141 @@
     box.setAttribute("aria-label", "Range " + usd(v.lo) + " to " + usd(v.hi) + ", now " + usd(v.cur));
   }
 
+  /* Line path through recorded points. Gaps longer than 15 minutes (Tangent wasn't open) are drawn
+     dashed, so a straight line never pretends to be data. Numbers only: no text goes into the SVG. */
+  function linePaths(pts, x, y) {
+    let solid = "", gaps = "";
+    pts.forEach(([m, p], i) => {
+      const X = x(m).toFixed(1), Y = y(p).toFixed(1);
+      if (i === 0) { solid += "M" + X + " " + Y; return; }
+      const [pm, pp] = pts[i - 1];
+      if (m - pm > 15) { gaps += "M" + x(pm).toFixed(1) + " " + y(pp).toFixed(1) + "L" + X + " " + Y; solid += "M" + X + " " + Y; }
+      else solid += "L" + X + " " + Y;
+    });
+    return { solid, gaps };
+  }
+  function yScale(pts, pc, top, bottom) {
+    let lo = Math.min(...pts.map((p) => p[1])), hi = Math.max(...pts.map((p) => p[1]));
+    if (pc > 0) { lo = Math.min(lo, pc); hi = Math.max(hi, pc); }
+    if (hi - lo < hi * 0.002) { const mid = (hi + lo) / 2; lo = mid * 0.999; hi = mid * 1.001; }
+    const pad = (hi - lo) * 0.08;
+    lo -= pad; hi += pad;
+    return (p) => bottom - ((p - lo) / (hi - lo)) * (bottom - top);
+  }
+  const SPARK_MIN_POINTS = 10;
+  function paintViz(box) {
+    const sym = box.dataset.sym;
+    const s = series(sym);
+    const spark = box.querySelector(".spark"), rng = box.querySelector(".rng");
+    // SVG elements have no .hidden property, so toggle the attribute.
+    if (!s || s.pts.length < SPARK_MIN_POINTS) { spark.setAttribute("hidden", ""); rng.hidden = false; paintRange(rng); return; }
+    rng.hidden = true;
+    spark.removeAttribute("hidden");
+    const W = 64, H = 22, q = quotes.get(sym) || {};
+    const x = (m) => ((m - OPEN_MIN) / (CLOSE_MIN - OPEN_MIN)) * W;
+    const y = yScale(s.pts, q.pc, 2, H - 2);
+    const { solid, gaps } = linePaths(s.pts, x, y);
+    const last = s.pts[s.pts.length - 1][1];
+    spark.classList.toggle("up", q.pc > 0 && last > q.pc);
+    spark.classList.toggle("down", q.pc > 0 && last < q.pc);
+    spark.innerHTML = (q.pc > 0 ? '<path class="base" d="M0 ' + y(q.pc).toFixed(1) + "H" + W + '"/>' : "") + '<path class="gap" d="' + gaps + '"/><path class="ln" d="' + solid + '"/>';
+  }
+  function vizEl(sym) {
+    const box = el("div", "viz");
+    box.dataset.sym = sym;
+    const spark = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    spark.setAttribute("class", "spark");
+    spark.setAttribute("viewBox", "0 0 64 22");
+    spark.setAttribute("aria-hidden", "true");
+    spark.setAttribute("hidden", "");
+    box.append(rangeBar(sym, "day"), spark);
+    paintViz(box);
+    return box;
+  }
+
+  /* The price page chart. Drawn at the box's real pixel size so the dot and lines stay crisp. */
+  let scrubMin = null;
+  function paintChart() {
+    const box = $("pg-chart");
+    if (!box || !pageSym) return;
+    const sym = pageSym, s = series(sym), q = quotes.get(sym) || {};
+    const read = $("pg-chart-read"), lab = $("pg-chart-lab"), note = $("pg-chart-note");
+    const svg = box.querySelector("svg");
+    if (!s || s.pts.length < 2) {
+      svg.innerHTML = "";
+      box.classList.add("empty");
+      lab.textContent = "Today";
+      read.textContent = "";
+      note.textContent = regular() ? "The chart fills in while Tangent is open. Keep it open to watch the day build." : "The chart fills in while Tangent is open during market hours.";
+      return;
+    }
+    box.classList.remove("empty");
+    const W = Math.max(200, box.clientWidth), H = 168, T = 10, B = H - 10;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    const x = (m) => ((m - OPEN_MIN) / (CLOSE_MIN - OPEN_MIN)) * W;
+    const y = yScale(s.pts, q.pc, T, B);
+    const { solid, gaps } = linePaths(s.pts, x, y);
+    const [lm, lp] = s.pts[s.pts.length - 1];
+    const dir = q.pc > 0 ? (lp > q.pc ? "up" : lp < q.pc ? "down" : "") : "";
+    box.classList.toggle("up", dir === "up");
+    box.classList.toggle("down", dir === "down");
+    const area = solid && !gaps ? solid + "L" + x(lm).toFixed(1) + " " + B + "L" + x(s.pts[0][0]).toFixed(1) + " " + B + "Z" : "";
+    let html = "";
+    if (area) html += '<path class="area" d="' + area + '"/>';
+    if (q.pc > 0) html += '<path class="base" d="M0 ' + y(q.pc).toFixed(1) + "H" + W + '"/>';
+    html += '<path class="gap" d="' + gaps + '"/><path class="ln" d="' + solid + '"/>';
+    let readout = null;
+    if (scrubMin != null) {
+      let best = s.pts[0];
+      for (const p of s.pts) if (Math.abs(p[0] - scrubMin) < Math.abs(best[0] - scrubMin)) best = p;
+      readout = best;
+      html += '<path class="cursor" d="M' + x(best[0]).toFixed(1) + " " + T + "V" + B + '"/><circle class="dot" r="4.5" cx="' + x(best[0]).toFixed(1) + '" cy="' + y(best[1]).toFixed(1) + '"/>';
+    } else {
+      html += '<circle class="dot now" r="4.5" cx="' + x(lm).toFixed(1) + '" cy="' + y(lp).toFixed(1) + '"/>';
+    }
+    svg.innerHTML = html;
+    lab.textContent = dayLabel(s.day);
+    read.textContent = readout ? minLabel(readout[0]) + " · " + usd(readout[1]) : "";
+    const first = s.pts.find((p) => p[0] > OPEN_MIN) || s.pts[0];
+    note.textContent = first[0] > OPEN_MIN + 15 || gaps ? "Recorded on this phone. Dashed parts are times Tangent wasn't open." : "Recorded on this phone from Finnhub prices.";
+    box.setAttribute("aria-label", dayLabel(s.day) + ": " + s.pts.length + " minutes recorded, from " + usd(s.pts[0][1]) + " at " + minLabel(s.pts[0][0]) + " to " + usd(lp) + " at " + minLabel(lm) + (q.pc > 0 ? ", previous close " + usd(q.pc) : ""));
+  }
+  function chartSection() {
+    const sec = el("section", "sec chart-sec");
+    const head = el("div", "chart-head");
+    const lab = el("span", "lab", "Today");
+    lab.id = "pg-chart-lab";
+    const read = el("span", "chart-read");
+    read.id = "pg-chart-read";
+    head.append(lab, read);
+    const box = el("div", "chart");
+    box.id = "pg-chart";
+    box.setAttribute("role", "img");
+    box.append(document.createElementNS("http://www.w3.org/2000/svg", "svg"));
+    const axis = el("div", "chart-axis");
+    for (const [m, t] of [[OPEN_MIN, "9:30"], [720, "12:00"], [CLOSE_MIN, "4:00"]]) {
+      const s = el("span", null, t);
+      s.style.left = ((m - OPEN_MIN) / (CLOSE_MIN - OPEN_MIN)) * 100 + "%";
+      axis.append(s);
+    }
+    const note = el("p", "fine");
+    note.id = "pg-chart-note";
+    const scrub = (e) => {
+      const r = box.getBoundingClientRect();
+      scrubMin = Math.round(OPEN_MIN + Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (CLOSE_MIN - OPEN_MIN));
+      paintChart();
+    };
+    const stop = () => { if (scrubMin == null) return; scrubMin = null; paintChart(); };
+    box.addEventListener("pointerdown", scrub);
+    box.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || e.buttons) scrub(e); });
+    box.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") stop(); });
+    box.addEventListener("pointerleave", stop);
+    box.addEventListener("pointercancel", stop);
+    sec.append(head, box, axis, note);
+    return sec;
+  }
+  window.addEventListener("resize", () => { if (pageSym) paintChart(); });
+
   function paintStatus() {
     const s = $("mkt");
     s.textContent = "";
@@ -510,7 +724,7 @@
     logoInto(logo, w.sym);
     const id = el("span", "wl-id");
     id.append(el("b", null, w.sym), el("small", null, w.name));
-    row.append(logo, id, rangeBar(w.sym, "day"));
+    row.append(logo, id, vizEl(w.sym));
     row.setAttribute("aria-label", w.name + ", open price page");
     row.addEventListener("click", () => openPage(w.sym));
     const px = el("div", "wl-px");
@@ -524,7 +738,7 @@
     const q = quotes.get(sym);
     li.querySelectorAll(".px").forEach((n) => { n.textContent = q ? usd(q.c) : "–"; });
     li.querySelectorAll(".chg").forEach(paintPill);
-    li.querySelectorAll(".rng").forEach(paintRange);
+    li.querySelectorAll(".viz").forEach(paintViz);
     const logo = li.querySelector(".logo");
     if (logo && !logo.classList.contains("has-logo") && (cachedProfile(sym) || {}).logo) logoInto(logo, sym);
   }
@@ -657,8 +871,10 @@
     if (now - quotesAt >= every) refreshAll(true, true);
     else paintStatus();
   }, 15000);
+  // Phones freeze or kill backgrounded apps, so save what the chart has recorded on the way out.
+  window.addEventListener("pagehide", saveQuotes);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { liveClose(); return; }
+    if (document.hidden) { saveQuotes(); liveClose(); return; }
     if (getKey() && Date.now() - quotesAt > 60000) refreshAll(true, true);
     else liveSync();
   });
@@ -827,6 +1043,7 @@
     wb.textContent = on ? "Watching" : "Watch";
   }
   function paintPageNumbers() {
+    paintChart();
     const q = quotes.get(pageSym);
     const ch = $("pg-change");
     if (ch) {
@@ -854,7 +1071,8 @@
     pageSym = sym;
     const w = watchOf(sym) || { sym, name: sym };
     page.hidden = false;
-    pushOverlay(() => { page.hidden = true; pageSym = null; liveSync(); });
+    scrubMin = null;
+    pushOverlay(() => { page.hidden = true; pageSym = null; scrubMin = null; liveSync(); });
     liveSync();
 
     const head = $("pg-head");
@@ -893,7 +1111,7 @@
     const grid = el("div", "grid");
     grid.id = "pg-grid";
     nums.append(grid);
-    body.append(top, day, year, nums, el("p", "about", "Today's range marks the open and the previous close. Prices come from Finnhub and can lag a little."));
+    body.append(top, chartSection(), day, year, nums, el("p", "about", "Today's range marks the open and the previous close. Prices come from Finnhub and can lag a little."));
     paintPageNumbers();
 
     if (!getKey()) return;
@@ -901,6 +1119,7 @@
       if (!(q && q.c > 0)) return;
       const keep = quotes.get(sym);
       if (!(keep && isLive() && keep.t >= q.t)) quotes.set(sym, Object.assign({}, q));
+      recordQuote(sym, q);
       if (pageSym === sym) { paintPageNumbers(); body.querySelectorAll(".rng").forEach(paintRange); body.querySelectorAll(".px").forEach((n) => { n.textContent = usd(quotes.get(sym).c); }); }
     }).catch(() => {});
     fh("/stock/metric", { symbol: sym, metric: "all" }, { ttl: 12 * 3600e3, high: true }).then((j) => {
@@ -991,5 +1210,5 @@
   }
 
   // Hooks for automated tests; harmless in normal use.
-  window.__tangent = { quotes, live, fhQ, watch: () => watch, openPage, refreshAll, connectKey, mstatus: () => mstatus, isLive };
+  window.__tangent = { quotes, live, fhQ, hist, watch: () => watch, openPage, refreshAll, connectKey, mstatus: () => mstatus, isLive };
 })();
