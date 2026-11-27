@@ -18,12 +18,12 @@
   const asArr = (v) => (Array.isArray(v) ? v : []);
   const asObj = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 
+  const MAX_WATCH = 40;
   const storedWatch = store.get("watch", null);
   let watch = (Array.isArray(storedWatch) ? storedWatch : DEFAULT_WATCH)
     .filter((w) => w && typeof w.sym === "string" && typeof w.name === "string")
     .map((w) => ({ sym: w.sym, name: w.name }))
-    .slice(0, 40);
-  const MAX_WATCH = 40;
+    .slice(0, MAX_WATCH);
   const saveWatch = () => store.set("watch", watch);
   const watchOf = (sym) => watch.find((w) => w.sym === sym) || null;
   const getKey = () => { const k = store.get("fhkey", ""); return typeof k === "string" ? k.trim() : ""; };
@@ -47,14 +47,33 @@
   }
   const initials = (name) => String(name || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]).join("").toUpperCase() || "?";
 
-  const toast = $("toast");
-  let toastTimer = null;
-  function showToast(msg, ms) {
+  /* Toasts. An optional action adds a button (Undo, Reload). A sticky toast (the update offer)
+     comes back after any other toast has gone. */
+  const toast = $("toast"), toastMsg = $("toast-msg"), toastAct = $("toast-act");
+  let toastTimer = null, toastAction = null, stickyToast = null;
+  function showToast(msg, ms, action) {
     clearTimeout(toastTimer);
-    toast.textContent = msg;
+    toastMsg.textContent = msg;
+    toastAction = action || null;
+    toastAct.hidden = !action;
+    toastAct.textContent = action ? action.label : "";
+    toast.classList.toggle("has-act", !!action);
     toast.hidden = false;
-    toastTimer = setTimeout(() => { toast.hidden = true; }, ms || 2000);
+    if (ms === Infinity) return;
+    toastTimer = setTimeout(hideToast, ms || (action ? 5000 : 2000));
   }
+  function hideToast() {
+    clearTimeout(toastTimer);
+    toast.hidden = true;
+    toastAction = null;
+    if (stickyToast) showToast(stickyToast.msg, Infinity, stickyToast.action);
+  }
+  toastAct.addEventListener("click", () => {
+    const a = toastAction;
+    if (stickyToast && stickyToast.action === a) stickyToast = null;
+    hideToast();
+    if (a) a.run();
+  });
 
   /* ======================= Finnhub requests ======================= */
   function fhError(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
@@ -151,6 +170,7 @@
   function saveQuotes() {
     store.set("lastQuotes", Object.fromEntries([...quotes].filter(([s]) => watchOf(s))));
     store.set("lastQuotesAt", quotesAt);
+    saveHist();
   }
   function refreshQuotes(force) {
     if (!getKey()) return Promise.resolve(quotes);
@@ -162,7 +182,7 @@
       for (const r of res) {
         if (r.status === "fulfilled") {
           const [s, q] = r.value;
-          if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, Object.assign({}, q)); ok++; }
+          if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, Object.assign({}, q)); recordQuote(s, q); ok++; }
         } else { lastErr = r.reason; if (r.reason && r.reason.code === "badkey") bad = true; }
       }
       keyBroken = bad && !ok;
@@ -176,11 +196,21 @@
   const dpOf = (sym) => { const q = quotes.get(sym); return q && Number.isFinite(q.dp) ? q.dp : null; };
 
   /* market hours */
-  function nyClock() {
-    const parts = {};
-    for (const p of new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(new Date())) parts[p.type] = p.value;
-    return { wd: parts.weekday, min: (Number(parts.hour) % 24) * 60 + Number(parts.minute) };
+  const nyFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "numeric", minute: "numeric", hour12: false });
+  const nyMemo = new Map();
+  /* New York date, weekday and minute of the day for a timestamp (memoized per minute: trades arrive fast). */
+  function nyParts(ms) {
+    const key = Math.floor(ms / 60000);
+    let r = nyMemo.get(key);
+    if (r) return r;
+    const p = {};
+    for (const x of nyFmt.formatToParts(new Date(key * 60000))) p[x.type] = x.value;
+    r = { day: p.year + "-" + p.month + "-" + p.day, wd: p.weekday, min: (Number(p.hour) % 24) * 60 + Number(p.minute) };
+    if (nyMemo.size > 8) nyMemo.clear();
+    nyMemo.set(key, r);
+    return r;
   }
+  const nyClock = () => nyParts(Date.now());
   function clockStatus() {
     const { wd, min } = nyClock();
     if (wd === "Sat" || wd === "Sun") return { open: false, session: null };
@@ -205,6 +235,72 @@
     if (mstatus.session === "post-market") return "After hours";
     return mstatus.holiday ? "Closed for " + mstatus.holiday : "Market closed";
   }
+
+  /* ======================= today's chart, recorded on this phone ======================= */
+  /* Finnhub's free plan has no intraday candles, so Tangent keeps its own: the last price in each
+     minute of the regular session (9:30 to 4:00 New York time), from live trades and quote refreshes.
+     Only the two most recent trading days are kept. */
+  const OPEN_MIN = 570, CLOSE_MIN = 960;
+  const hist = (() => {
+    const out = {};
+    for (const [day, syms] of Object.entries(asObj(store.get("hist", {})))) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      const d = {};
+      for (const [s, pts] of Object.entries(asObj(syms))) {
+        const ok = asArr(pts).filter((x) => Array.isArray(x) && Number.isInteger(x[0]) && x[0] >= OPEN_MIN && x[0] <= CLOSE_MIN && x[1] > 0);
+        if (ok.length) d[s] = ok;
+      }
+      out[day] = d;
+    }
+    return out;
+  })();
+  let histDirty = false;
+  function recordAt(sym, day, min, price, keepExisting) {
+    const d = hist[day] || (hist[day] = {});
+    const pts = d[sym] || (d[sym] = []);
+    const p = Math.round(price * 1e4) / 1e4;
+    let i = pts.length - 1;
+    while (i >= 0 && pts[i][0] > min) i--;
+    if (i >= 0 && pts[i][0] === min) { if (keepExisting || pts[i][1] === p) return; pts[i][1] = p; }
+    else pts.splice(i + 1, 0, [min, p]);
+    histDirty = true;
+    const days = Object.keys(hist).sort();
+    for (const old of days.slice(0, -2)) delete hist[old];
+  }
+  function record(sym, ms, price) {
+    if (!(price > 0) || !Number.isFinite(ms)) return;
+    const { day, wd, min } = nyParts(ms);
+    if (wd === "Sat" || wd === "Sun" || min < OPEN_MIN || min > CLOSE_MIN) return;
+    recordAt(sym, day, min, price);
+  }
+  /* A quote gives the latest price and the day's open, which anchors the chart at 9:30. */
+  function recordQuote(sym, q) {
+    if (!q || !(q.t > 0)) return;
+    const { day, wd, min } = nyParts(q.t * 1000);
+    if (wd === "Sat" || wd === "Sun" || min < OPEN_MIN) return;
+    if (q.o > 0) recordAt(sym, day, OPEN_MIN, q.o, true);
+    record(sym, q.t * 1000, q.c);
+  }
+  function saveHist() {
+    if (!histDirty) return;
+    histDirty = false;
+    const out = {};
+    for (const [day, syms] of Object.entries(hist)) {
+      out[day] = {};
+      for (const [s, pts] of Object.entries(syms)) if (watchOf(s)) out[day][s] = pts;
+    }
+    store.set("hist", out);
+  }
+  /* The most recent recorded day for a stock: today while the market trades, else the last session. */
+  function series(sym) {
+    for (const day of Object.keys(hist).sort().reverse()) {
+      const pts = hist[day][sym];
+      if (pts && pts.length) return { day, pts };
+    }
+    return null;
+  }
+  const minLabel = (min) => { const h = Math.floor(min / 60), m = min % 60; return ((h + 11) % 12 + 1) + ":" + String(m).padStart(2, "0") + (h < 12 ? " AM" : " PM"); };
+  const dayLabel = (day) => day === nyClock().day ? "Today" : new Date(day + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 
   /* logos */
   function profile(sym, high) { return fh("/stock/profile2", { symbol: sym }, { ttl: 7 * 864e5, persist: true, high }); }
@@ -296,19 +392,22 @@
   let tickRaf = 0, lastSave = 0, lastSummary = 0;
   function onTrades(list) {
     const latest = new Map();
-    for (const t of list) {
-      if (!t || typeof t.s !== "string" || !Number.isFinite(t.p) || t.p <= 0) continue;
-      const prev = latest.get(t.s);
-      if (!prev || (t.t || 0) >= (prev.t || 0)) latest.set(t.s, t);
+    const now = Date.now();
+    // Every trade counts for the day's high and low and for the chart; the newest one sets the price.
+    for (const t of list.filter((t) => t && typeof t.s === "string" && Number.isFinite(t.p) && t.p > 0).sort((a, b) => (a.t || 0) - (b.t || 0))) {
+      const q = quotes.get(t.s);
+      if (!q || !(q.pc > 0)) continue;
+      q.h = Math.max(q.h || t.p, t.p);
+      q.l = q.l > 0 ? Math.min(q.l, t.p) : t.p;
+      record(t.s, t.t || now, t.p);
+      latest.set(t.s, t);
     }
     for (const [s, t] of latest) {
       const q = quotes.get(s);
-      if (!q || !(q.pc > 0)) continue;
       const before = q.c;
       q.c = t.p;
       q.d = t.p - q.pc;
       q.dp = (q.d / q.pc) * 100;
-      { q.h = Math.max(q.h || t.p, t.p); q.l = q.l > 0 ? Math.min(q.l, t.p) : t.p; }
       if (t.t) q.t = Math.floor(t.t / 1000);
       const dir = t.p > before ? 1 : t.p < before ? -1 : 0;
       if (dir || !ticks.has(s)) ticks.set(s, dir);
@@ -321,8 +420,10 @@
     tickRaf = 0;
     const now = Date.now();
     for (const [s, dir] of ticks) {
+      const q = quotes.get(s);
+      if (!q) continue;
       document.querySelectorAll('.px[data-px="' + esc(s) + '"]').forEach((n) => {
-        n.textContent = usd(quotes.get(s).c);
+        n.textContent = usd(q.c);
         if (dir && !reduced) {
           n.classList.remove("tick-up", "tick-down");
           void n.offsetWidth;
@@ -333,6 +434,7 @@
       });
       document.querySelectorAll('.chg[data-sym="' + esc(s) + '"]').forEach(paintPill);
       document.querySelectorAll('.rng[data-sym="' + esc(s) + '"]').forEach(paintRange);
+      document.querySelectorAll('.viz[data-sym="' + esc(s) + '"]').forEach(paintViz);
     }
     ticks.clear();
     if (pageSym) paintPageNumbers();
@@ -416,6 +518,141 @@
     box.setAttribute("aria-label", "Range " + usd(v.lo) + " to " + usd(v.hi) + ", now " + usd(v.cur));
   }
 
+  /* Line path through recorded points. Gaps longer than 15 minutes (Tangent wasn't open) are drawn
+     dashed, so a straight line never pretends to be data. Numbers only: no text goes into the SVG. */
+  function linePaths(pts, x, y) {
+    let solid = "", gaps = "";
+    pts.forEach(([m, p], i) => {
+      const X = x(m).toFixed(1), Y = y(p).toFixed(1);
+      if (i === 0) { solid += "M" + X + " " + Y; return; }
+      const [pm, pp] = pts[i - 1];
+      if (m - pm > 15) { gaps += "M" + x(pm).toFixed(1) + " " + y(pp).toFixed(1) + "L" + X + " " + Y; solid += "M" + X + " " + Y; }
+      else solid += "L" + X + " " + Y;
+    });
+    return { solid, gaps };
+  }
+  function yScale(pts, pc, top, bottom) {
+    let lo = Math.min(...pts.map((p) => p[1])), hi = Math.max(...pts.map((p) => p[1]));
+    if (pc > 0) { lo = Math.min(lo, pc); hi = Math.max(hi, pc); }
+    if (hi - lo < hi * 0.002) { const mid = (hi + lo) / 2; lo = mid * 0.999; hi = mid * 1.001; }
+    const pad = (hi - lo) * 0.08;
+    lo -= pad; hi += pad;
+    return (p) => bottom - ((p - lo) / (hi - lo)) * (bottom - top);
+  }
+  const SPARK_MIN_POINTS = 10;
+  function paintViz(box) {
+    const sym = box.dataset.sym;
+    const s = series(sym);
+    const spark = box.querySelector(".spark"), rng = box.querySelector(".rng");
+    // SVG elements have no .hidden property, so toggle the attribute.
+    if (!s || s.pts.length < SPARK_MIN_POINTS) { spark.setAttribute("hidden", ""); rng.hidden = false; paintRange(rng); return; }
+    rng.hidden = true;
+    spark.removeAttribute("hidden");
+    const W = 64, H = 22, q = quotes.get(sym) || {};
+    const x = (m) => ((m - OPEN_MIN) / (CLOSE_MIN - OPEN_MIN)) * W;
+    const y = yScale(s.pts, q.pc, 2, H - 2);
+    const { solid, gaps } = linePaths(s.pts, x, y);
+    const last = s.pts[s.pts.length - 1][1];
+    spark.classList.toggle("up", q.pc > 0 && last > q.pc);
+    spark.classList.toggle("down", q.pc > 0 && last < q.pc);
+    spark.innerHTML = (q.pc > 0 ? '<path class="base" d="M0 ' + y(q.pc).toFixed(1) + "H" + W + '"/>' : "") + '<path class="gap" d="' + gaps + '"/><path class="ln" d="' + solid + '"/>';
+  }
+  function vizEl(sym) {
+    const box = el("div", "viz");
+    box.dataset.sym = sym;
+    const spark = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    spark.setAttribute("class", "spark");
+    spark.setAttribute("viewBox", "0 0 64 22");
+    spark.setAttribute("aria-hidden", "true");
+    spark.setAttribute("hidden", "");
+    box.append(rangeBar(sym, "day"), spark);
+    paintViz(box);
+    return box;
+  }
+
+  /* The price page chart. Drawn at the box's real pixel size so the dot and lines stay crisp. */
+  let scrubMin = null;
+  function paintChart() {
+    const box = $("pg-chart");
+    if (!box || !pageSym) return;
+    const sym = pageSym, s = series(sym), q = quotes.get(sym) || {};
+    const read = $("pg-chart-read"), lab = $("pg-chart-lab"), note = $("pg-chart-note");
+    const svg = box.querySelector("svg");
+    if (!s || s.pts.length < 2) {
+      svg.innerHTML = "";
+      box.classList.add("empty");
+      lab.textContent = "Today";
+      read.textContent = "";
+      note.textContent = regular() ? "The chart fills in while Tangent is open. Keep it open to watch the day build." : "The chart fills in while Tangent is open during market hours.";
+      return;
+    }
+    box.classList.remove("empty");
+    const W = Math.max(200, box.clientWidth), H = 168, T = 10, B = H - 10;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    const x = (m) => ((m - OPEN_MIN) / (CLOSE_MIN - OPEN_MIN)) * W;
+    const y = yScale(s.pts, q.pc, T, B);
+    const { solid, gaps } = linePaths(s.pts, x, y);
+    const [lm, lp] = s.pts[s.pts.length - 1];
+    const dir = q.pc > 0 ? (lp > q.pc ? "up" : lp < q.pc ? "down" : "") : "";
+    box.classList.toggle("up", dir === "up");
+    box.classList.toggle("down", dir === "down");
+    const area = solid && !gaps ? solid + "L" + x(lm).toFixed(1) + " " + B + "L" + x(s.pts[0][0]).toFixed(1) + " " + B + "Z" : "";
+    let html = "";
+    if (area) html += '<path class="area" d="' + area + '"/>';
+    if (q.pc > 0) html += '<path class="base" d="M0 ' + y(q.pc).toFixed(1) + "H" + W + '"/>';
+    html += '<path class="gap" d="' + gaps + '"/><path class="ln" d="' + solid + '"/>';
+    let readout = null;
+    if (scrubMin != null) {
+      let best = s.pts[0];
+      for (const p of s.pts) if (Math.abs(p[0] - scrubMin) < Math.abs(best[0] - scrubMin)) best = p;
+      readout = best;
+      html += '<path class="cursor" d="M' + x(best[0]).toFixed(1) + " " + T + "V" + B + '"/><circle class="dot" r="4.5" cx="' + x(best[0]).toFixed(1) + '" cy="' + y(best[1]).toFixed(1) + '"/>';
+    } else {
+      html += '<circle class="dot now" r="4.5" cx="' + x(lm).toFixed(1) + '" cy="' + y(lp).toFixed(1) + '"/>';
+    }
+    svg.innerHTML = html;
+    lab.textContent = dayLabel(s.day);
+    read.textContent = readout ? minLabel(readout[0]) + " · " + usd(readout[1]) : "";
+    const first = s.pts.find((p) => p[0] > OPEN_MIN) || s.pts[0];
+    note.textContent = first[0] > OPEN_MIN + 15 || gaps ? "Recorded on this phone. Dashed parts are times Tangent wasn't open." : "Recorded on this phone from Finnhub prices.";
+    box.setAttribute("aria-label", dayLabel(s.day) + ": " + s.pts.length + " minutes recorded, from " + usd(s.pts[0][1]) + " at " + minLabel(s.pts[0][0]) + " to " + usd(lp) + " at " + minLabel(lm) + (q.pc > 0 ? ", previous close " + usd(q.pc) : ""));
+  }
+  function chartSection() {
+    const sec = el("section", "sec chart-sec");
+    const head = el("div", "chart-head");
+    const lab = el("span", "lab", "Today");
+    lab.id = "pg-chart-lab";
+    const read = el("span", "chart-read");
+    read.id = "pg-chart-read";
+    head.append(lab, read);
+    const box = el("div", "chart");
+    box.id = "pg-chart";
+    box.setAttribute("role", "img");
+    box.append(document.createElementNS("http://www.w3.org/2000/svg", "svg"));
+    const axis = el("div", "chart-axis");
+    for (const [m, t] of [[OPEN_MIN, "9:30"], [720, "12:00"], [CLOSE_MIN, "4:00"]]) {
+      const s = el("span", null, t);
+      s.style.left = ((m - OPEN_MIN) / (CLOSE_MIN - OPEN_MIN)) * 100 + "%";
+      axis.append(s);
+    }
+    const note = el("p", "fine");
+    note.id = "pg-chart-note";
+    const scrub = (e) => {
+      const r = box.getBoundingClientRect();
+      scrubMin = Math.round(OPEN_MIN + Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (CLOSE_MIN - OPEN_MIN));
+      paintChart();
+    };
+    const stop = () => { if (scrubMin == null) return; scrubMin = null; paintChart(); };
+    box.addEventListener("pointerdown", scrub);
+    box.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || e.buttons) scrub(e); });
+    box.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") stop(); });
+    box.addEventListener("pointerleave", stop);
+    box.addEventListener("pointercancel", stop);
+    sec.append(head, box, axis, note);
+    return sec;
+  }
+  window.addEventListener("resize", () => { if (pageSym) paintChart(); });
+
   function paintStatus() {
     const s = $("mkt");
     s.textContent = "";
@@ -466,28 +703,134 @@
     else if (sortMode === "moves") list.sort((a, b) => (dpOf(b.sym) ?? -1e9) - (dpOf(a.sym) ?? -1e9));
     return list;
   }
+  /* Rows are kept per symbol and only repainted, so a refresh doesn't rebuild logos or flicker. */
+  const rows = new Map();
+  const GRIP_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg>';
+  function makeRow(w) {
+    const li = el("li");
+    li.dataset.sym = w.sym;
+    const grip = el("button", "wl-grip");
+    grip.type = "button";
+    grip.innerHTML = GRIP_ICON;
+    grip.setAttribute("aria-label", "Move " + w.sym + ". Drag, or use the up and down arrow keys.");
+    grip.addEventListener("pointerdown", (e) => startDrag(e, li));
+    grip.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const from = watch.findIndex((x) => x.sym === w.sym);
+      moveStock(from, from + (e.key === "ArrowUp" ? -1 : 1), true);
+    });
+    const row = el("button", "wl-row");
+    row.type = "button";
+    const logo = el("span", "logo");
+    logoInto(logo, w.sym);
+    const id = el("span", "wl-id");
+    id.append(el("b", null, w.sym), el("small", null, w.name));
+    row.append(logo, id, vizEl(w.sym));
+    row.setAttribute("aria-label", w.name + ", open price page");
+    row.addEventListener("click", () => openPage(w.sym));
+    const px = el("div", "wl-px");
+    px.append(pxEl(w.sym), pill(w.sym));
+    px.addEventListener("click", () => openPage(w.sym));
+    li.append(grip, row, px);
+    return li;
+  }
+  function paintRow(li) {
+    const sym = li.dataset.sym;
+    const q = quotes.get(sym);
+    li.querySelectorAll(".px").forEach((n) => { n.textContent = q ? usd(q.c) : "–"; });
+    li.querySelectorAll(".chg").forEach(paintPill);
+    li.querySelectorAll(".viz").forEach(paintViz);
+    const logo = li.querySelector(".logo");
+    if (logo && !logo.classList.contains("has-logo") && (cachedProfile(sym) || {}).logo) logoInto(logo, sym);
+  }
   function renderList() {
     document.querySelectorAll("#sort button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.sort === sortMode ? "true" : "false"));
     const ul = $("wl");
-    ul.textContent = "";
-    for (const w of sorted()) {
-      const li = el("li");
-      const row = el("button", "wl-row");
-      row.type = "button";
-      const logo = el("span", "logo");
-      logoInto(logo, w.sym);
-      const id = el("span", "wl-id");
-      id.append(el("b", null, w.sym), el("small", null, w.name));
-      row.append(logo, id, rangeBar(w.sym, "day"));
-      row.setAttribute("aria-label", w.name + ", open price page");
-      row.addEventListener("click", () => openPage(w.sym));
-      const px = el("div", "wl-px");
-      px.append(pxEl(w.sym), pill(w.sym));
-      px.addEventListener("click", () => openPage(w.sym));
-      li.append(row, px);
-      ul.append(li);
-    }
+    ul.classList.toggle("reorder", sortMode === "mine" && watch.length > 1);
+    const list = sorted();
+    const keep = new Set(list.map((w) => w.sym));
+    for (const [s, li] of rows) if (!keep.has(s)) { li.remove(); rows.delete(s); }
+    const focused = document.activeElement;
+    list.forEach((w, i) => {
+      let li = rows.get(w.sym);
+      if (!li) { li = makeRow(w); rows.set(w.sym, li); }
+      else paintRow(li);
+      if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] || null);
+    });
+    // Moving a node can drop focus; put it back (keyboard reordering relies on this).
+    if (focused && focused !== document.activeElement && ul.contains(focused)) focused.focus({ preventScroll: true });
     $("wl-count").textContent = watch.length + (watch.length === 1 ? " stock" : " stocks");
+  }
+
+  /* Reordering, for the "Mine" sort. */
+  function moveStock(from, to, announce) {
+    if (from < 0 || from >= watch.length) return;
+    to = Math.max(0, Math.min(watch.length - 1, to));
+    if (to === from) return;
+    const [w] = watch.splice(from, 1);
+    watch.splice(to, 0, w);
+    saveWatch();
+    renderList();
+    if (announce) showToast(w.sym + " moved to " + (to + 1) + " of " + watch.length, 1400);
+  }
+  function startDrag(e, li) {
+    if (sortMode !== "mine" || (e.pointerType === "mouse" && e.button !== 0)) return;
+    e.preventDefault();
+    const grip = e.currentTarget;
+    try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+    const main = $("main");
+    const items = [...$("wl").children];
+    const from = items.indexOf(li);
+    if (from < 0) return;
+    const scroll0 = main.scrollTop;
+    // Positions in scroll-content coordinates, so autoscrolling while dragging stays correct.
+    const mids = items.map((n) => { const r = n.getBoundingClientRect(); return r.top + scroll0 + r.height / 2; });
+    const h = li.getBoundingClientRect().height;
+    const y0 = e.clientY + scroll0;
+    let lastY = e.clientY, to = from, raf = 0, done = false;
+    li.classList.add("dragging");
+    document.body.classList.add("dragging-row");
+    const layout = () => {
+      const dy = lastY + main.scrollTop - y0;
+      li.style.transform = "translateY(" + dy + "px)";
+      const mid = mids[from] + dy;
+      to = from;
+      for (let i = 0; i < items.length; i++) {
+        if (i < from && mid < mids[i]) { to = i; break; }
+      }
+      for (let i = items.length - 1; i > from; i--) {
+        if (mid > mids[i]) { to = i; break; }
+      }
+      items.forEach((n, i) => {
+        if (i === from) return;
+        const shift = from < to && i > from && i <= to ? -h : from > to && i >= to && i < from ? h : 0;
+        n.style.transform = shift ? "translateY(" + shift + "px)" : "";
+      });
+    };
+    const edge = () => {
+      if (done) return;
+      const r = main.getBoundingClientRect();
+      const step = lastY < r.top + 56 ? -10 : lastY > r.bottom - 56 ? 10 : 0;
+      if (step) { main.scrollTop += step; layout(); }
+      raf = requestAnimationFrame(edge);
+    };
+    const move = (ev) => { lastY = ev.clientY; layout(); };
+    const end = () => {
+      done = true;
+      cancelAnimationFrame(raf);
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", end);
+      grip.removeEventListener("pointercancel", end);
+      items.forEach((n) => { n.style.transform = ""; });
+      li.classList.remove("dragging");
+      document.body.classList.remove("dragging-row");
+      moveStock(from, to, false);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+    raf = requestAnimationFrame(edge);
   }
   function render() {
     const has = !!getKey();
@@ -530,12 +873,23 @@
     if (now - quotesAt >= every) refreshAll(true, true);
     else paintStatus();
   }, 15000);
+  // Phones freeze or kill backgrounded apps, so save what the chart has recorded on the way out.
+  window.addEventListener("pagehide", saveQuotes);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { liveClose(); return; }
+    if (document.hidden) { saveQuotes(); liveClose(); return; }
     if (getKey() && Date.now() - quotesAt > 60000) refreshAll(true, true);
     else liveSync();
   });
-  document.querySelectorAll("#sort button").forEach((b) => b.addEventListener("click", () => { sortMode = b.dataset.sort; store.set("wlSort", sortMode); renderList(); }));
+  document.querySelectorAll("#sort button").forEach((b) => b.addEventListener("click", () => {
+    const was = sortMode;
+    sortMode = b.dataset.sort;
+    store.set("wlSort", sortMode);
+    renderList();
+    if (sortMode === "mine" && was !== "mine" && watch.length > 1 && !store.get("toldReorder", false)) {
+      store.set("toldReorder", true);
+      showToast("Drag the handle to put your stocks in order", 2600);
+    }
+  }));
 
   /* ======================= key ======================= */
   async function connectKey(key) {
@@ -594,9 +948,17 @@
   /* ======================= add a stock ======================= */
   const addSheet = $("add-sheet");
   let addTok = 0, addTimer = null;
+  /* US tickers: plain (AAPL), or a share class after a dot (BRK.B, BF.A). Foreign listings come back
+     as AMD.SW, BRKB.MX or BRK.B:XETRA, so a two-letter suffix or a colon means another exchange. */
+  const US_TICKER = /^[A-Z0-9]{1,6}(\.[A-E])?$/;
   async function symbolSearch(q) {
-    const j = await fh("/search", { q }, { ttl: 3600e3, high: true });
-    return asArr(j && j.result).filter((r) => r && r.symbol && !/[.:]/.test(r.symbol) && (!r.type || /common stock|adr|etp|etf|reit/i.test(r.type))).slice(0, 12);
+    const j = await fh("/search", { q, exchange: "US" }, { ttl: 3600e3, high: true });
+    const seen = new Set();
+    return asArr(j && j.result).filter((r) => {
+      if (!r || typeof r.symbol !== "string" || !US_TICKER.test(r.symbol) || seen.has(r.symbol)) return false;
+      seen.add(r.symbol);
+      return !r.type || /common stock|adr|etp|etf|reit/i.test(r.type);
+    }).slice(0, 12);
   }
   function openAdd() {
     if (!getKey()) { showToast("Connect your Finnhub key first."); $("key-input").focus(); return; }
@@ -652,10 +1014,22 @@
     fh("/quote", { symbol: sym }, { high: true }).then((q) => { if (q && q.c > 0) { quotes.set(sym, Object.assign({}, q)); saveQuotes(); render(); } }).catch(() => {});
   }
   function removeStock(sym) {
-    watch = watch.filter((w) => w.sym !== sym);
+    const at = watch.findIndex((w) => w.sym === sym);
+    if (at < 0) return;
+    const gone = watch[at];
+    watch.splice(at, 1);
     saveWatch();
-    showToast(sym + " removed");
+    showToast(sym + " removed", 5000, { label: "Undo", run: () => restoreStock(gone, at) });
     render();
+    paintWatchBtn();
+    liveSync();
+  }
+  function restoreStock(w, at) {
+    if (watchOf(w.sym) || watch.length >= MAX_WATCH) return;
+    watch.splice(Math.min(at, watch.length), 0, w);
+    saveWatch();
+    render();
+    paintWatchBtn();
     liveSync();
   }
 
@@ -663,7 +1037,15 @@
   const page = $("page");
   let pageSym = null;
   const yearCache = new Map();
+  function paintWatchBtn() {
+    const wb = $("pg-watch");
+    if (!wb || !pageSym || wb.dataset.armed === "1") return;
+    const on = !!watchOf(pageSym);
+    wb.setAttribute("aria-pressed", on ? "true" : "false");
+    wb.textContent = on ? "Watching" : "Watch";
+  }
   function paintPageNumbers() {
+    paintChart();
     const q = quotes.get(pageSym);
     const ch = $("pg-change");
     if (ch) {
@@ -691,7 +1073,8 @@
     pageSym = sym;
     const w = watchOf(sym) || { sym, name: sym };
     page.hidden = false;
-    pushOverlay(() => { page.hidden = true; pageSym = null; liveSync(); });
+    scrubMin = null;
+    pushOverlay(() => { page.hidden = true; pageSym = null; scrubMin = null; liveSync(); });
     liveSync();
 
     const head = $("pg-head");
@@ -702,17 +1085,17 @@
     id.append(el("b", null, sym), el("small", null, w.name));
     const wb = el("button", "watchbtn");
     wb.type = "button";
-    const paintWb = () => { const on = !!watchOf(sym); wb.setAttribute("aria-pressed", on ? "true" : "false"); wb.textContent = on ? "Watching" : "Watch"; };
-    paintWb();
+    wb.id = "pg-watch";
     wb.addEventListener("click", () => {
       if (watchOf(sym)) {
-        if (wb.dataset.armed !== "1") { wb.dataset.armed = "1"; wb.textContent = "Tap to remove"; setTimeout(() => { wb.dataset.armed = ""; paintWb(); }, 3500); return; }
+        if (wb.dataset.armed !== "1") { wb.dataset.armed = "1"; wb.textContent = "Tap to remove"; setTimeout(() => { wb.dataset.armed = ""; paintWatchBtn(); }, 3500); return; }
         wb.dataset.armed = "";
         removeStock(sym);
       } else addStock(sym, w.name);
-      paintWb();
+      paintWatchBtn();
     });
     head.append(logo, id, wb);
+    paintWatchBtn();
 
     const body = $("pg-body");
     body.textContent = "";
@@ -730,7 +1113,7 @@
     const grid = el("div", "grid");
     grid.id = "pg-grid";
     nums.append(grid);
-    body.append(top, day, year, nums, el("p", "about", "Today's range marks the open and the previous close. Prices come from Finnhub and can lag a little."));
+    body.append(top, chartSection(), day, year, nums, el("p", "about", "Today's range marks the open and the previous close. Prices come from Finnhub and can lag a little."));
     paintPageNumbers();
 
     if (!getKey()) return;
@@ -738,6 +1121,7 @@
       if (!(q && q.c > 0)) return;
       const keep = quotes.get(sym);
       if (!(keep && isLive() && keep.t >= q.t)) quotes.set(sym, Object.assign({}, q));
+      recordQuote(sym, q);
       if (pageSym === sym) { paintPageNumbers(); body.querySelectorAll(".rng").forEach(paintRange); body.querySelectorAll(".px").forEach((n) => { n.textContent = usd(quotes.get(sym).c); }); }
     }).catch(() => {});
     fh("/stock/metric", { symbol: sym, metric: "all" }, { ttl: 12 * 3600e3, high: true }).then((j) => {
@@ -799,10 +1183,34 @@
   /* ======================= start ======================= */
   render();
   refreshAll(false, true);
+  /* Updates: a new service worker waits until you tap Reload, so the app never swaps under you. */
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
-    window.addEventListener("load", () => { navigator.serviceWorker.register("./sw.js").catch(() => {}); });
+    const sw = navigator.serviceWorker;
+    // Reload only when you tapped Reload, not when the very first worker takes control.
+    let asked = false, reloading = false;
+    sw.addEventListener("controllerchange", () => {
+      if (!asked || reloading) return;
+      reloading = true;
+      location.reload();
+    });
+    const offerUpdate = (w) => {
+      if (!w || !sw.controller || stickyToast) return;
+      stickyToast = { msg: "A new version of Tangent is ready", action: { label: "Reload", run: () => { asked = true; w.postMessage({ type: "skip-waiting" }); } } };
+      if (toast.hidden) showToast(stickyToast.msg, Infinity, stickyToast.action);
+    };
+    window.addEventListener("load", async () => {
+      let reg;
+      try { reg = await sw.register("./sw.js"); } catch (e) { return; }
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.addEventListener("updatefound", () => {
+        const w = reg.installing;
+        if (w) w.addEventListener("statechange", () => { if (w.state === "installed") offerUpdate(w); });
+      });
+      // Installed apps can stay open for days; look for a new version whenever Tangent comes back.
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) reg.update().catch(() => {}); });
+    });
   }
 
   // Hooks for automated tests; harmless in normal use.
-  window.__tangent = { quotes, live, fhQ, watch: () => watch, openPage, refreshAll, connectKey, mstatus: () => mstatus, isLive };
+  window.__tangent = { quotes, live, fhQ, hist, watch: () => watch, openPage, refreshAll, connectKey, mstatus: () => mstatus, isLive };
 })();

@@ -1,6 +1,6 @@
 /* Tangent service worker: keeps the app itself available offline and remembers company logos.
    Prices are never cached here; the app keeps the last prices it saw on its own. */
-const VERSION = "tangent-v4";
+const VERSION = "tangent-v5";
 const LOGOS = "tangent-logos";
 const SHELL = [
   "./",
@@ -21,7 +21,13 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // No skipWaiting here: a new version waits until the app asks (the "Reload" toast), so a page
+  // never runs old code against a new cache. The very first install activates right away anyway.
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)));
+});
+
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "skip-waiting") self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {

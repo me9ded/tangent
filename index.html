@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Tangent</title>
 <meta name="description" content="Live prices for the stocks you follow.">
-<meta name="theme-color" content="#0b0a10">
-<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0a10" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
+<meta name="color-scheme" content="dark light">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tangent">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- "default" follows the phone's light or dark appearance; black-translucent would put white text on the light theme. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
@@ -128,8 +130,8 @@
   </section>
 </div>
 
-<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<noscript><p style="padding: 24px; color: #fff;">Tangent needs JavaScript to load prices.</p></noscript>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden><span id="toast-msg"></span><button type="button" id="toast-act" hidden></button></div>
+<noscript><p style="padding: 24px; color: var(--ink);">Tangent needs JavaScript to load prices.</p></noscript>
 <script src="app.js" defer></script>
 </body>
 </html>
