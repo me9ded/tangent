@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   e2e:
@@ -20,11 +21,37 @@ jobs:
           cache-dependency-path: tests/package-lock.json
       - run: npm ci
       - run: npm run check-shell
+      # Build the site exactly as it will be deployed, version stamp included, and test that.
+      - run: node build-site.js ../_site "tangent-${GITHUB_SHA::7}"
       - run: npx playwright install --with-deps chromium webkit
       - run: npm test
+        env:
+          SITE_DIR: ../_site
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
           path: tests/playwright-report
           retention-days: 7
+      - name: Hand the tested site to the deploy job
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: e2e
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
