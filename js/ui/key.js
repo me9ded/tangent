@@ -1,15 +1,24 @@
-/* Connecting, changing and removing the Finnhub key. */
-import { $, store, reduced } from "../util.js";
+/* Connecting the Finnhub key, from the setup card on Home or from Settings. */
+import { $, store } from "../util.js";
 import { S } from "../state.js";
 import { fh, fhError } from "../finnhub.js";
 import { liveClose } from "../live.js";
 import { refreshAll } from "../refresh.js";
-import { render } from "./home.js";
 import { showToast } from "./toast.js";
 
-export async function connectKey(key) {
+const homeUI = () => ({ input: $("key-input"), btn: $("key-go"), msg: $("key-msg") });
+
+/** Asks the browser to keep Tangent's storage (the key, the list, the charts) when space runs low. */
+export function keepStorage() {
+  try {
+    const st = navigator.storage;
+    if (st && st.persist && st.persisted) st.persisted().then((p) => p || st.persist()).catch(() => {});
+  } catch (e) {}
+}
+
+export async function connectKey(key, ui = homeUI()) {
   key = String(key || "").trim();
-  const msg = $("key-msg"), btn = $("key-go");
+  const { input, btn, msg } = ui;
   if (!key) { msg.textContent = "Paste your key first."; return false; }
   btn.disabled = true;
   msg.textContent = "Checking your key…";
@@ -20,8 +29,9 @@ export async function connectKey(key) {
     S.keyBroken = false;
     S.editingKey = false;
     liveClose();
-    $("key-input").value = "";
+    input.value = "";
     msg.textContent = "Your key stays on this phone. Tangent only sends it to Finnhub.";
+    keepStorage();
     showToast("Live prices connected");
     await refreshAll(true);
     return true;
@@ -34,21 +44,4 @@ export async function connectKey(key) {
 }
 export function initKey() {
   $("key-form").addEventListener("submit", (e) => { e.preventDefault(); connectKey($("key-input").value); });
-  $("key-change").addEventListener("click", () => {
-    S.editingKey = !S.editingKey;
-    render();
-    if (S.editingKey) { $("main").scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" }); $("key-input").focus({ preventScroll: true }); }
-  });
-  $("key-remove").addEventListener("click", () => {
-    const b = $("key-remove");
-    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to remove"; setTimeout(() => { b.dataset.armed = ""; b.textContent = "Remove key"; }, 4000); return; }
-    store.set("fhkey", "");
-    S.keyBroken = false;
-    S.editingKey = false;
-    b.dataset.armed = "";
-    b.textContent = "Remove key";
-    liveClose();
-    render();
-    showToast("Key removed from this phone");
-  });
 }

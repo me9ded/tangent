@@ -1,5 +1,5 @@
-// Builds the folder GitHub Pages serves: only the app's own files, with the service worker's
-// version stamped so every deploy is a new version (and open apps offer "Reload").
+// Builds the folder GitHub Pages serves: only the app's own files, with the version stamped into the
+// service worker (so every deploy is a new version, and open apps offer "Reload") and into the page.
 //   node build-site.js <out dir> <version>
 const fs = require("fs");
 const path = require("path");
@@ -11,7 +11,7 @@ if (!outArg || !version) fail("usage: node build-site.js <out dir> <version>");
 if (!/^tangent-[\w.-]+$/.test(version)) fail("version must look like tangent-<something>, got " + version);
 const out = path.resolve(outArg);
 
-const FILES = ["index.html", "styles.css", "sw.js", "manifest.webmanifest", "app.js"];
+const FILES = ["index.html", "styles.css", "sw.js", "manifest.webmanifest"];
 const DIRS = ["js", "icons", "fonts"];
 // Tooling that lives next to the app but isn't part of it.
 const SKIP = new Set(["package.json"]);
@@ -36,6 +36,13 @@ const sw = fs.readFileSync(swPath, "utf8");
 const marker = 'const VERSION = "tangent-dev";';
 if (sw.split(marker).length !== 2) fail("sw.js must contain exactly one " + marker);
 fs.writeFileSync(swPath, sw.replace(marker, 'const VERSION = "' + version + '";'));
+
+// The page shows the same version in Settings.
+const htmlPath = path.join(out, "index.html");
+const html = fs.readFileSync(htmlPath, "utf8");
+const meta = '<meta name="version" content="tangent-dev">';
+if (html.split(meta).length !== 2) fail("index.html must contain exactly one " + meta);
+fs.writeFileSync(htmlPath, html.replace(meta, '<meta name="version" content="' + version + '">'));
 
 // Everything the service worker precaches has to be in the site, or installing it fails.
 const block = sw.match(/const SHELL = \[([\s\S]*?)\];/);

@@ -1,12 +1,11 @@
 /* Company logos: initials until Finnhub's profile (cached a week) has a logo URL. */
 import { sleep, esc, initials } from "./util.js";
-import { S, watchOf, getKey } from "./state.js";
+import { S, nameOf, getKey } from "./state.js";
 import { fhQ, profile, cachedProfile } from "./finnhub.js";
 
 export function logoInto(slot, sym) {
   slot.dataset.logo = sym;
-  const w = watchOf(sym);
-  slot.textContent = initials(w ? w.name : sym);
+  slot.textContent = initials(nameOf(sym));
   const p = cachedProfile(sym);
   if (p && p.logo) {
     const im = new Image();

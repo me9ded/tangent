@@ -20,12 +20,18 @@ export const S = {
   /** When the watchlist's quotes were last refreshed (ms). */
   quotesAt: 0,
   /** Market status: { open, session, holiday }. */
-  mstatus: { open: false, session: null }
+  mstatus: { open: false, session: null },
+  /** No connection: the phone says so, or the last refresh couldn't reach Finnhub. */
+  offline: false,
+  /** The newest session day among the watchlist's quotes ("YYYY-MM-DD"), so labels can say "today" or "on Tue". */
+  listDay: null
 };
 /** Latest quote per symbol: Finnhub's { c, d, dp, h, l, o, pc, t }, kept current by live trades. */
 export const quotes = new Map();
 /** 52-week high and low per symbol, from /stock/metric. */
 export const yearCache = new Map();
+/** Company names for stocks that aren't on the watchlist (from search), so a stock page can show them. */
+export const names = new Map();
 
 export function loadState() {
   const storedWatch = store.get("watch", null);
@@ -41,4 +47,5 @@ export function loadState() {
 }
 export const saveWatch = () => store.set("watch", S.watch);
 export const watchOf = (sym) => S.watch.find((w) => w.sym === sym) || null;
+export const nameOf = (sym) => (watchOf(sym) || {}).name || names.get(sym) || sym;
 export const getKey = () => { const k = store.get("fhkey", ""); return typeof k === "string" ? k.trim() : ""; };

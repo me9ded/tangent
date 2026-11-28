@@ -1,17 +1,19 @@
 /* Live trades over Finnhub's WebSocket, while the US market is open and Tangent is on screen. */
 import { esc, usd, reduced } from "./util.js";
 import { S, quotes, getKey } from "./state.js";
-import { regular, saveQuotes } from "./market.js";
+import { regular, saveQuotes, updateListDay } from "./market.js";
 import { record } from "./history.js";
+import { applyTrade } from "./quote.js";
 import { paintViz } from "./chart.js";
-import { paintPill, paintRange } from "./ui/bits.js";
+import { paintChg, paintRange } from "./ui/bits.js";
 import { paintStatus } from "./ui/status.js";
-import { renderSummary } from "./ui/list.js";
+import { renderHero } from "./ui/hero.js";
+import { renderList } from "./ui/list.js";
 import { paintPageNumbers } from "./ui/stock.js";
 
 const FH_WS = "wss://ws.finnhub.io";
 export const live = { ws: null, open: false, subs: new Set(), retry: 0, timer: 0, lastTick: 0 };
-const liveWanted = () => !!getKey() && !S.keyBroken && !document.hidden && regular() && S.watch.length > 0;
+const liveWanted = () => !!getKey() && !S.keyBroken && !document.hidden && navigator.onLine !== false && regular() && (S.watch.length > 0 || !!S.pageSym);
 
 export function liveSync() {
   if (!liveWanted()) { liveClose(); return; }
@@ -26,7 +28,7 @@ function liveOpen() {
   live.ws = ws;
   live.open = false;
   live.subs = new Set();
-  ws.addEventListener("open", () => { if (live.ws !== ws) return; live.open = true; live.retry = 0; liveSubscribe(); paintStatus(); });
+  ws.addEventListener("open", () => { if (live.ws !== ws) return; live.open = true; live.retry = 0; S.offline = false; liveSubscribe(); paintStatus(); });
   ws.addEventListener("message", (ev) => {
     if (live.ws !== ws) return;
     let m;
@@ -66,30 +68,37 @@ function liveSubscribe() {
 export const isLive = () => live.open && Date.now() - live.lastTick < 90000;
 
 const ticks = new Map();
-let tickRaf = 0, lastSave = 0, lastSummary = 0;
+let tickRaf = 0, lastSave = 0, lastSummary = 0, summaryT = 0;
+/* The list-wide parts (the hero, Moves order, day labels) redraw at most every 2 seconds, and once
+   more after the last trade of a burst, so they never stay behind the rows. */
+function summary() {
+  clearTimeout(summaryT);
+  summaryT = 0;
+  lastSummary = Date.now();
+  const day = S.listDay;
+  // The first trade of a session moves the list into it; every row's day label changes with it.
+  if (updateListDay() !== day) document.querySelectorAll("button.chg[data-sym]").forEach(paintChg);
+  renderHero();
+  // Keeps "Moves" order current; rows wait until nobody's touching the list.
+  if (S.sortMode === "moves") renderList();
+}
 function onTrades(list) {
-  const latest = new Map();
+  const before = new Map();
   const now = Date.now();
-  // Every trade counts for the day's high and low and for the chart; the newest one sets the price.
+  // In time order: every trade counts for the high, the low and the chart; the newest sets the price.
   for (const t of list.filter((t) => t && typeof t.s === "string" && Number.isFinite(t.p) && t.p > 0).sort((a, b) => (a.t || 0) - (b.t || 0))) {
     const q = quotes.get(t.s);
     if (!q || !(q.pc > 0)) continue;
-    q.h = Math.max(q.h || t.p, t.p);
-    q.l = q.l > 0 ? Math.min(q.l, t.p) : t.p;
-    record(t.s, t.t || now, t.p);
-    latest.set(t.s, t);
+    if (!before.has(t.s)) before.set(t.s, q.c);
+    if (!applyTrade(q, t.p, t.t || now)) continue;
+    record(t.s, t.t || now, t.p, q.pc);
   }
-  for (const [s, t] of latest) {
-    const q = quotes.get(s);
-    const before = q.c;
-    q.c = t.p;
-    q.d = t.p - q.pc;
-    q.dp = (q.d / q.pc) * 100;
-    if (t.t) q.t = Math.floor(t.t / 1000);
-    const dir = t.p > before ? 1 : t.p < before ? -1 : 0;
+  if (!before.size) return;
+  for (const [s, was] of before) {
+    const c = quotes.get(s).c;
+    const dir = c > was ? 1 : c < was ? -1 : 0;
     if (dir || !ticks.has(s)) ticks.set(s, dir);
   }
-  if (!latest.size) return;
   live.lastTick = Date.now();
   if (!tickRaf) tickRaf = requestAnimationFrame(paintTicks);
 }
@@ -109,13 +118,14 @@ function paintTicks() {
         n._t = setTimeout(() => n.classList.remove("tick-up", "tick-down"), 220);
       }
     });
-    document.querySelectorAll('.chg[data-sym="' + esc(s) + '"]').forEach(paintPill);
+    document.querySelectorAll('button.chg[data-sym="' + esc(s) + '"]').forEach(paintChg);
     document.querySelectorAll('.rng[data-sym="' + esc(s) + '"]').forEach(paintRange);
     document.querySelectorAll('.viz[data-sym="' + esc(s) + '"]').forEach(paintViz);
   }
   ticks.clear();
   if (S.pageSym) paintPageNumbers();
-  if (now - lastSummary > 2000) { lastSummary = now; renderSummary(); }
+  if (now - lastSummary >= 2000) summary();
+  else if (!summaryT) summaryT = setTimeout(summary, 2000 - (now - lastSummary));
   if (now - lastSave > 10000) { lastSave = now; S.quotesAt = now; saveQuotes(); }
   paintStatus();
 }

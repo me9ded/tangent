@@ -1,7 +1,7 @@
 /* "Put Tangent on your home screen": the browser's install prompt where there is one, steps otherwise. */
 import { $, el } from "../util.js";
 import { showToast } from "./toast.js";
-import { pushOverlay, back } from "./overlays.js";
+import { openLayer, back } from "./layers.js";
 
 const SHARE_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M5 11v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8"/></svg>';
 const DOTS_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
@@ -12,9 +12,10 @@ export function initInstall() {
   const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/.test(ua);
   const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; $("install").hidden = false; });
-  window.addEventListener("appinstalled", () => { deferredPrompt = null; $("install").hidden = true; showToast("Tangent is on your home screen", 3000); });
-  $("install").hidden = isStandalone() || !(isIOS || isAndroid);
+  const offer = (on) => { $("install").hidden = !on; $("install-group").hidden = !on; };
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; offer(true); });
+  window.addEventListener("appinstalled", () => { deferredPrompt = null; offer(false); showToast("Tangent is on your home screen", 3000); });
+  offer(!isStandalone() && (isIOS || isAndroid));
 
   function renderInstall() {
     const body = $("install-body");
@@ -41,6 +42,8 @@ export function initInstall() {
     body.append(steps);
   }
   const installSheet = $("install-sheet");
-  $("install").addEventListener("click", () => { renderInstall(); installSheet.hidden = false; pushOverlay(() => { installSheet.hidden = true; }); });
+  const open = (e) => { renderInstall(); openLayer(installSheet, { opener: e.currentTarget, focus: $("install-title") }); };
+  $("install").addEventListener("click", open);
+  $("install-open").addEventListener("click", open);
   installSheet.addEventListener("click", (e) => { if (e.target === installSheet || e.target.closest("[data-close]")) back(); });
 }
