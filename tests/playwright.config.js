@@ -19,7 +19,8 @@ module.exports = defineConfig({
   },
   webServer: {
     command: `python3 -m http.server ${PORT} --bind 127.0.0.1`,
-    cwd: "..",
+    // CI tests the built site (exactly what gets deployed); locally, the repo itself.
+    cwd: process.env.SITE_DIR || "..",
     url: `http://127.0.0.1:${PORT}/index.html`,
     reuseExistingServer: !process.env.CI,
     stdout: "ignore",

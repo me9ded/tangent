@@ -1,19 +1,22 @@
 # Tangent
 
-Live prices for the stocks you follow. One screen with your watchlist and a price page for each stock.
+Live prices for the stocks you follow: your watchlist, a page for each stock, and search. Three tabs at the bottom: **Home**, **Search** and **Settings**.
 
 **Open it:** https://me9ded.github.io/tangent/
 
 ## What's in it
 
-- **Watchlist** shows each stock's price, today's change and today's range. Sort it by biggest moves, A–Z, or your own order: in **Mine**, drag a stock by its handle (or focus the handle and use the arrow keys).
+- **Your list** at the top of Home: the average move of your stocks today, how many are up, and a chart of the biggest gainers and losers.
+- **Watchlist** shows each stock's price and today's change. Sort it by biggest moves, A–Z, or your own order: in **Mine**, drag a stock by its handle (or focus the handle and use the arrow keys). In **Moves**, rows slide into their new order, but never while your finger is on the list.
+- **Swipe a stock left** to remove it, then tap **Undo** if you didn't mean to. **Pull down** on Home to refresh.
 - **Live prices**: while the US market is open, trades stream in over Finnhub's WebSocket and the price flashes green or red as it ticks. Outside regular hours, or if the stream drops, prices refresh every minute instead.
-- **Today's movers** at the top shows how many of your stocks are up and charts the biggest gainers and losers.
-- **Tap a change pill** to switch every pill between percent and dollars.
-- **Today's chart**: Finnhub's free plan has no intraday history, so Tangent records its own: the last price of each minute while it's open during market hours, for the two most recent trading days. The price page draws it against the previous close; hold a finger on it to read any minute. Times Tangent wasn't open are drawn dashed. Once a stock has ten minutes recorded, its watchlist row shows a sparkline instead of the range bar.
-- **Price page**: tap a stock for its big live price, today's chart, today's range (with the open and previous close marked), the 52-week range, and the open, previous close, day high/low and 52-week high/low.
-- **Add a stock** searches US-listed stocks and ETFs by name or ticker, share classes like BRK.B included. Remove one from its price page, and tap **Undo** if you didn't mean to.
-- **Light and dark**: Tangent follows your phone's appearance.
+- **Honest times**: prices always say when they're from, in New York time. Before Finnhub has today's numbers, Tangent says "Your list on Tue" or "Tue close" instead of calling them today's, and the first trade of a new day is measured against the last close. Offline, it says so and shows when the last prices are from.
+- **Tap a change** to switch every change between percent and dollars.
+- **Today's chart**: Finnhub's free plan has no intraday history, so Tangent records its own: the last price of each minute while it's open during market hours, for the two most recent trading days, each against its own previous close. Hold a finger on the chart and the big price above it shows that minute. Times Tangent wasn't open are drawn dashed. Once a stock has ten minutes recorded, its watchlist row shows a sparkline.
+- **Stock page**: tap a stock for its big live price, today's chart, today's range (with the open and previous close marked), the 52-week range, and the open, previous close, day high/low and 52-week high/low. Your phone's back gesture closes it, and its address (`#AAPL`) opens it again after a reload.
+- **Search** finds US-listed stocks and ETFs by name or ticker, share classes like BRK.B included. Tap **+** to add one, or tap the stock to look at its page first. Your last searches stay below the box.
+- **Settings**: change or remove your Finnhub key, and choose **System**, **Light** or **Dark**.
+- **Accessible**: works with a keyboard and screen readers (focus moves sensibly between tabs and pages, and changes are read as "up" and "down"). Press **/** to search and **R** to refresh.
 - **Updates** never swap the app under you: when a new version is ready, a **Reload** button appears.
 - It works offline once installed and shows the last prices it saw.
 
@@ -41,15 +44,18 @@ Prices can lag a little. Tangent isn't investment advice.
 
 ## Files
 
-Plain HTML, CSS and JavaScript. There's no build step.
+Plain HTML, CSS and JavaScript modules. There's no build step.
 
-- `index.html`, `styles.css`, `app.js` are the app.
+- `index.html` and `styles.css` are the page; `js/` holds the app as ES modules. `js/main.js` wires everything up, and the other modules only define things, so the unit tests can import them without a browser.
 - `sw.js` is the service worker that keeps it working offline.
 - `manifest.webmanifest` and `icons/` make it installable.
-- `fonts/` holds Bricolage Grotesque, Literata and IBM Plex Mono, all under the SIL Open Font License.
-- `tests/` holds the end-to-end tests. They're not part of the app.
+- `fonts/` holds [Inter](https://github.com/rsms/inter), under the SIL Open Font License (`fonts/OFL.txt`).
+- `index.html` has a Content Security Policy: the page can only load its own files, show Finnhub's logos and talk to Finnhub. The tests fail on any violation.
+- `tests/` holds the unit and end-to-end tests. They're not part of the app.
 
-When you change any file the service worker precaches, bump `VERSION` in `sw.js` so phones pick up the new version.
+## Deploys
+
+Every push to `main` runs the tests and, if they pass, deploys to GitHub Pages. CI builds the site with `tests/build-site.js`, which copies only the app's files and stamps the service worker's `VERSION` with the commit. The tests run against that exact build, and the same build is what gets deployed. Phones with Tangent open get a **Reload** prompt. A deployed version opens straight from the service worker's cache, so it starts instantly even on a bad connection. In the repo, `VERSION` stays `tangent-dev`, which fetches fresh files first so local editing works; don't change it by hand.
 
 ## Running tests
 
@@ -59,8 +65,9 @@ The tests drive the real app in Android Chrome and iPhone Safari engines against
 cd tests
 npm ci
 npx playwright install chromium webkit
-npm test                 # all tests
-npm run check-shell      # every file sw.js precaches exists
+npm run unit             # unit tests for the pure logic (Node only, no browser)
+npm test                 # end-to-end tests
+npm run check-shell      # sw.js precaches every file and module, and nothing missing
 SHOTS=/some/folder npx playwright test theme --grep shots   # save light and dark screenshots
 ```
 

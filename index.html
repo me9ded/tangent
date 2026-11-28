@@ -3,125 +3,188 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Only Tangent's own files run here. Network access is limited to Finnhub (prices) and Twelve Data (chart history). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' https://static.finnhub.io https://static2.finnhub.io; connect-src 'self' https://finnhub.io wss://ws.finnhub.io; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Tangent</title>
 <meta name="description" content="Live prices for the stocks you follow.">
-<meta name="theme-color" content="#0b0a10" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
-<meta name="color-scheme" content="dark light">
+<!-- Deploys stamp this with the commit (tests/build-site.js); Settings shows it. -->
+<meta name="version" content="tangent-dev">
+<meta name="theme-color" content="#fbf9f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101012" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tangent">
 <!-- "default" follows the phone's light or dark appearance; black-translucent would put white text on the light theme. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<!-- Applies a chosen Light or Dark appearance before the page draws, so the other one never flashes. -->
+<script src="js/theme.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="preload" href="fonts/bricolage-latin.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="fonts/plexmono-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preconnect" href="https://finnhub.io">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="app">
-  <header class="top">
-    <div class="top-in">
-      <div class="brand">
-        <h1>Tangent</h1>
-        <p class="mkt" id="mkt"><i></i><span>Market closed</span></p>
-      </div>
-      <button class="ibtn" id="install" type="button" aria-label="Add Tangent to your home screen" title="Install" hidden>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5 12 15.5 17 10.5M5 20h14"></path></svg>
-      </button>
-      <button class="ibtn" id="refresh" type="button" aria-label="Refresh prices" title="Refresh">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"></path><path d="M20 4v4.5h-4.5"></path></svg>
-      </button>
-    </div>
-  </header>
+<div class="app" id="app">
+  <div class="views">
 
-  <main class="scroll" id="main">
-    <section class="card setup" id="setup" hidden>
-      <h2>Connect live prices</h2>
-      <p class="muted" id="key-broken" hidden>Finnhub stopped accepting your saved key. Paste a fresh one below.</p>
-      <p class="muted">Prices come from Finnhub. Their free plan is enough, and getting a key takes about two minutes.</p>
-      <ol class="steps">
-        <li><span>Create a free account at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>.</span></li>
-        <li><span>Copy the API key on your Finnhub dashboard.</span></li>
-        <li><span>Paste it here and tap Connect.</span></li>
-      </ol>
-      <form class="ask" id="key-form" autocomplete="off">
-        <input id="key-input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your Finnhub key" aria-label="Finnhub API key">
-        <button class="go" id="key-go" type="submit">Connect</button>
-      </form>
-      <p class="fine" id="key-msg">Your key stays on this phone. Tangent only sends it to Finnhub.</p>
+    <!-- Home -->
+    <section class="view" id="v-home" aria-labelledby="home-h">
+      <div class="ptr" id="ptr" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"></path><path d="M20 4v4.5h-4.5"></path></svg>
+      </div>
+      <header class="bar">
+        <h1 class="brand" id="home-h" tabindex="-1">Tangent</h1>
+        <button class="ibtn" id="install" type="button" aria-label="Add Tangent to your home screen" title="Install" hidden>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5 12 15.5 17 10.5M5 20h14"></path></svg>
+        </button>
+        <button class="ibtn" id="refresh" type="button" aria-label="Refresh prices" title="Refresh">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7"></path><path d="M20 4v4.5h-4.5"></path></svg>
+        </button>
+      </header>
+      <p class="chip" id="mkt"><i></i><span>Market closed</span></p>
+
+      <section class="card setup" id="setup" aria-labelledby="setup-h" hidden>
+        <h2 id="setup-h">Connect live prices</h2>
+        <p class="warn" id="key-broken" hidden>Finnhub stopped accepting your saved key. Paste a fresh one below.</p>
+        <p class="muted">Prices come from Finnhub. Their free plan is enough, and getting a key takes about two minutes.</p>
+        <ol class="steps">
+          <li><span>Create a free account at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>.</span></li>
+          <li><span>Copy the API key on your Finnhub dashboard.</span></li>
+          <li><span>Paste it here and tap Connect.</span></li>
+        </ol>
+        <form class="ask" id="key-form" autocomplete="off">
+          <input id="key-input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your Finnhub key" aria-label="Finnhub API key" aria-describedby="key-msg">
+          <button class="go" id="key-go" type="submit">Connect</button>
+        </form>
+        <p class="fine" id="key-msg">Your key stays on this phone. Tangent only sends it to Finnhub.</p>
+      </section>
+
+      <section class="hero" id="hero" aria-labelledby="hero-lab" hidden>
+        <h2 class="hero-lab" id="hero-lab">Your list today</h2>
+        <p class="hero-val" id="hero-val"></p>
+        <p class="hero-sub" id="hero-sub"></p>
+        <div class="mv" id="mv"></div>
+      </section>
+
+      <div class="wl-head">
+        <h2>Watchlist <small id="wl-count"></small></h2>
+        <div class="seg" id="sort" role="group" aria-label="Sort">
+          <button type="button" data-sort="moves">Moves</button>
+          <button type="button" data-sort="az">A–Z</button>
+          <button type="button" data-sort="mine">Mine</button>
+        </div>
+      </div>
+      <ul class="wl" id="wl"></ul>
+      <button class="wl-add" id="add" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        Add a stock
+      </button>
+      <p class="foot">Tap a change to switch between percent and dollars. Swipe a stock left to remove it. Prices can lag a little, and none of this is investment advice.</p>
     </section>
 
-    <section class="card sum" id="sum" hidden>
-      <h2 id="sum-h"></h2>
-      <p class="muted" id="sum-p"></p>
-      <div class="mv" id="mv"></div>
+    <!-- Search -->
+    <section class="view" id="v-search" aria-labelledby="search-h" hidden>
+      <header class="bar sticky">
+        <h1 id="search-h" tabindex="-1">Search</h1>
+        <form class="ask search" id="search-form" role="search" autocomplete="off">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+          <input id="search-input" type="search" placeholder="Company or ticker" aria-label="Search for a company or ticker" aria-describedby="search-msg" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+        </form>
+      </header>
+      <p class="fine pad" id="search-msg" aria-live="polite">US-listed stocks and ETFs. Tap one to see its price, or + to add it to your watchlist.</p>
+      <ul class="res" id="search-results"></ul>
+      <section class="recent" id="recent" aria-labelledby="recent-h" hidden>
+        <div class="sub-head">
+          <h2 id="recent-h">Recent</h2>
+          <button type="button" class="link" id="recent-clear">Clear</button>
+        </div>
+        <ul class="res" id="recent-list"></ul>
+      </section>
     </section>
 
-    <div class="wl-head">
-      <div>
-        <h2>Watchlist</h2>
-        <small id="wl-count"></small>
-      </div>
-      <div class="seg" id="sort" role="group" aria-label="Sort">
-        <button type="button" data-sort="moves">Moves</button>
-        <button type="button" data-sort="az">A–Z</button>
-        <button type="button" data-sort="mine">Mine</button>
-      </div>
-    </div>
-    <ul class="wl" id="wl"></ul>
-    <button class="wl-add" id="add" type="button">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
-      Add a stock
+    <!-- Settings -->
+    <section class="view" id="v-settings" aria-labelledby="settings-h" hidden>
+      <header class="bar">
+        <h1 id="settings-h" tabindex="-1">Settings</h1>
+      </header>
+
+      <section class="group" aria-labelledby="set-fh-h">
+        <h2 id="set-fh-h">Finnhub key</h2>
+        <p class="muted" id="set-key-state">Not connected</p>
+        <div class="btns" id="set-key-btns">
+          <button type="button" class="pill-btn" id="key-change">Change key</button>
+          <button type="button" class="pill-btn danger" id="key-remove">Remove key</button>
+        </div>
+        <form class="ask" id="set-key-form" autocomplete="off" hidden>
+          <input id="set-key-input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your Finnhub key" aria-label="New Finnhub API key" aria-describedby="set-key-msg">
+          <button class="go" id="set-key-go" type="submit">Save</button>
+        </form>
+        <p class="fine" id="set-key-msg" hidden></p>
+        <p class="fine" id="feed-state">Prices from Finnhub</p>
+      </section>
+
+      <section class="group" aria-labelledby="theme-h">
+        <h2 id="theme-h">Appearance</h2>
+        <fieldset class="seg radios" id="theme">
+          <legend class="sr">Appearance</legend>
+          <label><input type="radio" name="theme" value="system" checked><span>System</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </fieldset>
+      </section>
+
+      <section class="group" id="install-group" aria-labelledby="install-h" hidden>
+        <h2 id="install-h">Home screen</h2>
+        <p class="muted">Installed, Tangent gets its own icon and opens full screen.</p>
+        <div class="btns"><button type="button" class="pill-btn" id="install-open">Put Tangent on your home screen</button></div>
+      </section>
+
+      <section class="group" aria-labelledby="about-h">
+        <h2 id="about-h">About</h2>
+        <p class="muted">Prices come from Finnhub, live while the US market is open. Charts are recorded on this phone while Tangent is open. Your key and your list never leave this phone, except that the key is sent to Finnhub.</p>
+        <p class="muted">Prices can lag a little. Tangent is not investment advice.</p>
+        <p class="fine" id="version"></p>
+      </section>
+    </section>
+  </div>
+
+  <nav class="tabs" aria-label="Main">
+    <button type="button" data-tab="home" aria-current="page">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10.2 12 4.5l7.5 5.7V19a.9.9 0 0 1-.9.9H14.6v-5.4H9.4v5.4H5.4a.9.9 0 0 1-.9-.9z"></path></svg>
+      <span>Home</span>
     </button>
-
-    <div class="key-row" id="key-row" hidden>
-      <span id="feed-state">Prices from Finnhub</span>
-      <button type="button" id="key-change">Change key</button>
-      <button type="button" id="key-remove">Remove key</button>
-    </div>
-    <p class="about">Tap a change pill to switch between percent and dollars. Prices can lag a little and this isn't investment advice.</p>
-  </main>
+    <button type="button" data-tab="search">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.3"></circle><path d="m15.8 15.8 4.2 4.2"></path></svg>
+      <span>Search</span>
+    </button>
+    <button type="button" data-tab="settings">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 7.5h8.5M17.5 7.5H20M4 16.5h2.5M11.5 16.5H20"></path><circle cx="15" cy="7.5" r="2.3"></circle><circle cx="9" cy="16.5" r="2.3"></circle></svg>
+      <span>Settings</span>
+    </button>
+  </nav>
 </div>
 
-<!-- Price page -->
-<div class="page" id="page" hidden>
+<!-- Stock page -->
+<div class="page" id="page" role="dialog" aria-modal="true" aria-labelledby="pg-title" hidden>
   <header class="pg-top">
     <button class="back" id="pg-back" type="button" aria-label="Back">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
     </button>
     <div class="pg-head" id="pg-head"></div>
+    <button class="watchbtn" id="pg-watch" type="button" aria-pressed="false">Watch</button>
   </header>
   <div class="scroll pg-body" id="pg-body"></div>
-</div>
-
-<!-- Add a stock -->
-<div class="scrim" id="add-sheet" hidden>
-  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="add-title">
-    <div class="sheet-head">
-      <h2 id="add-title">Add a stock</h2>
-      <button class="x" type="button" data-close aria-label="Close">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-      </button>
-    </div>
-    <form class="ask" id="add-form" autocomplete="off">
-      <input id="add-input" type="search" placeholder="Company or ticker" aria-label="Company or ticker" autocapitalize="off" spellcheck="false" enterkeyhint="search">
-      <button class="go" type="submit">Search</button>
-    </form>
-    <p class="fine" id="add-msg"></p>
-    <ul class="add-results" id="add-results"></ul>
-  </section>
 </div>
 
 <!-- Install -->
 <div class="scrim" id="install-sheet" hidden>
   <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="install-title">
     <div class="sheet-head">
-      <h2 id="install-title">Put Tangent on your home screen</h2>
+      <h2 id="install-title" tabindex="-1">Put Tangent on your home screen</h2>
       <button class="x" type="button" data-close aria-label="Close">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
       </button>
@@ -131,7 +194,7 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden><span id="toast-msg"></span><button type="button" id="toast-act" hidden></button></div>
-<noscript><p style="padding: 24px; color: var(--ink);">Tangent needs JavaScript to load prices.</p></noscript>
-<script src="app.js" defer></script>
+<noscript><p class="noscript">Tangent needs JavaScript to load prices.</p></noscript>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>

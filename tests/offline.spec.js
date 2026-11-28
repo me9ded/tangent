@@ -11,7 +11,8 @@ test("works offline once the service worker has the app", async ({ page, context
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller), { timeout: 10000 }).toBe(true);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.locator("h1")).toHaveText("Tangent");
+  await expect(page.locator("#home-h")).toHaveText("Tangent");
+  await expect(page.locator("#mkt")).toContainText("Offline");
   await expect(page.locator('#wl .px[data-px="AAPL"]')).toHaveText("$200.00");
   await context.setOffline(false);
 });
@@ -30,7 +31,7 @@ test("a new version waits for Reload, then takes over", async ({ page, context }
   await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
   await expect(page.locator("#toast-msg")).toHaveText("A new version of Tangent is ready", { timeout: 10000 });
   // An ordinary toast doesn't lose the offer.
-  await page.locator('#wl .chg[data-sym="AAPL"]').click();
+  await page.locator('.tabs [data-tab="settings"]').click();
   await page.locator("#key-remove").click();
   await page.locator("#key-remove").click();
   await expect(page.locator("#toast-msg")).toHaveText("Key removed from this phone");
@@ -39,6 +40,6 @@ test("a new version waits for Reload, then takes over", async ({ page, context }
   const reloaded = page.waitForEvent("load");
   await page.locator("#toast-act").click();
   await reloaded;
-  await expect(page.locator("h1")).toHaveText("Tangent");
+  await expect(page.locator("#home-h")).toHaveText("Tangent");
   expect(await page.evaluate(async () => !(await navigator.serviceWorker.getRegistration()).waiting)).toBe(true);
 });

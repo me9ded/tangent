@@ -1,0 +1,1 @@
+{ "type": "module", "private": true, "description": "Lets Node import these files as ES modules for the unit tests. Not deployed." }
