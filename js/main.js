@@ -5,25 +5,33 @@ import { S, quotes, loadState, getKey } from "./state.js";
 import { fhQ } from "./finnhub.js";
 import { clockStatus, marketStatus, trading, saveQuotes } from "./market.js";
 import { hist, loadHist } from "./history.js";
-import { paintChart } from "./chart.js";
+import { US_TICKER } from "./search.js";
 import { live, liveSync, liveClose, isLive } from "./live.js";
 import { refreshAll } from "./refresh.js";
 import { render } from "./ui/home.js";
-import { renderList } from "./ui/list.js";
+import { renderList, initList } from "./ui/list.js";
 import { paintStatus } from "./ui/status.js";
-import { openPage } from "./ui/stock.js";
+import { openPage, initStock } from "./ui/stock.js";
 import { initToast, showToast, toastState } from "./ui/toast.js";
-import { initOverlays, back, overlayCount } from "./ui/overlays.js";
-import { initAdd } from "./ui/add.js";
-import { initKey, connectKey } from "./ui/key.js";
+import { initLayers, back, layerCount } from "./ui/layers.js";
+import { initNav, showTab, currentTab } from "./ui/nav.js";
+import { initSearch } from "./ui/searchtab.js";
+import { initSettings } from "./ui/settings.js";
+import { initKey, connectKey, keepStorage } from "./ui/key.js";
 import { initInstall } from "./ui/install.js";
+import { initPtr } from "./ui/ptr.js";
 
 loadState();
 loadHist();
 S.mstatus = clockStatus();
+S.offline = navigator.onLine === false;
 initToast();
-initOverlays();
-initAdd();
+initLayers();
+initNav();
+initList();
+initStock();
+initSearch();
+initSettings();
 initKey();
 initInstall();
 
@@ -32,6 +40,7 @@ $("refresh").addEventListener("click", () => {
   if (!getKey()) { $("key-input").focus(); return; }
   refreshAll(true);
 });
+initPtr(() => (getKey() ? refreshAll(true) : undefined));
 let lastStatusCheck = 0;
 setInterval(() => {
   if (document.hidden || !getKey()) return;
@@ -48,32 +57,41 @@ document.addEventListener("visibilitychange", () => {
   if (getKey() && Date.now() - S.quotesAt > 60000) refreshAll(true, true);
   else liveSync();
 });
+window.addEventListener("offline", () => { S.offline = true; liveClose(); paintStatus(); });
+window.addEventListener("online", () => { S.offline = false; paintStatus(); if (getKey()) refreshAll(true, true); });
 
 /* ---------- sorting ---------- */
 document.querySelectorAll("#sort button").forEach((b) => b.addEventListener("click", () => {
   const was = S.sortMode;
   S.sortMode = b.dataset.sort;
   store.set("wlSort", S.sortMode);
-  renderList();
+  renderList({ now: true });
   if (S.sortMode === "mine" && was !== "mine" && S.watch.length > 1 && !store.get("toldReorder", false)) {
     store.set("toldReorder", true);
     showToast("Drag the handle to put your stocks in order", 2600);
   }
 }));
-
-$("pg-back").addEventListener("click", back);
-window.addEventListener("resize", () => { if (S.pageSym) paintChart(); });
+$("add").addEventListener("click", () => showTab("search", { focusEl: $("search-input") }));
 
 /* ---------- keyboard ---------- */
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && overlayCount()) { back(); return; }
-  if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === "r" && !overlayCount()) $("refresh").click();
+  if (e.key === "Escape" && layerCount()) { back(); return; }
+  if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey || layerCount()) return;
+  if (e.key === "r" && currentTab() === "home") $("refresh").click();
+  else if (e.key === "/") { e.preventDefault(); showTab("search", { focusEl: $("search-input") }); }
 });
 
 /* ---------- start ---------- */
+// A stock page's address is #SYM, so a reload (or a link) opens it again, with Home behind it. From a
+// link, Home becomes this history entry and the page gets a new one; a reload reuses the page's entry.
+const symFromHash = () => { try { const s = decodeURIComponent(location.hash.slice(1)); return US_TICKER.test(s) ? s : null; } catch (e) { return null; } };
+const startSym = symFromHash();
+if (location.hash && !(startSym && history.state && history.state.tangent)) { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }
 render();
 refreshAll(false, true);
+if (getKey()) keepStorage();
+if (startSym) openPage(startSym, { opener: null });
+window.addEventListener("hashchange", () => { const s = symFromHash(); if (s && s !== S.pageSym) openPage(s, { opener: null }); });
 
 /* Updates: a new service worker waits until you tap Reload, so the app never swaps under you. */
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
@@ -93,6 +111,8 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   const register = async () => {
     let reg;
     try { reg = await sw.register("./sw.js"); } catch (e) { return; }
+    // Some browsers (and blocked or test setups) resolve without a registration.
+    if (!reg) return;
     if (reg.waiting) offerUpdate(reg.waiting);
     reg.addEventListener("updatefound", () => {
       const w = reg.installing;
@@ -107,4 +127,4 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
 }
 
 // Hooks for automated tests; harmless in normal use.
-window.__tangent = { quotes, live, fhQ, hist, watch: () => S.watch, openPage, refreshAll, connectKey, mstatus: () => S.mstatus, isLive };
+window.__tangent = { quotes, live, fhQ, hist, S, watch: () => S.watch, openPage, showTab, refreshAll, connectKey, mstatus: () => S.mstatus, isLive };

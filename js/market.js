@@ -4,6 +4,7 @@ import { nyClock } from "./time.js";
 import { S, quotes, watchOf, getKey } from "./state.js";
 import { fh } from "./finnhub.js";
 import { recordQuote, saveHist } from "./history.js";
+import { mergeQuote, latestDay } from "./quote.js";
 
 let quoteJob = null;
 export function saveQuotes() {
@@ -21,18 +22,28 @@ export function refreshQuotes(force) {
     for (const r of res) {
       if (r.status === "fulfilled") {
         const [s, q] = r.value;
-        if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, Object.assign({}, q)); recordQuote(s, q); ok++; }
+        if (q && Number.isFinite(q.c) && q.c > 0) { quotes.set(s, mergeQuote(quotes.get(s), q)); recordQuote(s, q); ok++; }
       } else { lastErr = r.reason; if (r.reason && r.reason.code === "badkey") bad = true; }
     }
     S.keyBroken = bad && !ok;
     if (!ok && lastErr) throw lastErr;
     S.quotesAt = Date.now();
+    S.offline = false;
+    updateListDay();
     saveQuotes();
     return quotes;
   })().finally(() => { quoteJob = null; });
   return quoteJob;
 }
 export const dpOf = (sym) => { const q = quotes.get(sym); return q && Number.isFinite(q.dp) ? q.dp : null; };
+/** Recomputes which session the watchlist's numbers are from. */
+export function updateListDay() { S.listDay = latestDay(S.watch.map((w) => quotes.get(w.sym))); return S.listDay; }
+/** Time of the newest price on the watchlist (ms), or 0. */
+export function latestQuoteMs() {
+  let t = 0;
+  for (const w of S.watch) { const q = quotes.get(w.sym); if (q && q.t > t) t = q.t; }
+  return t * 1000;
+}
 
 /* Market hours from the clock, used until (or when) Finnhub's market status isn't available. */
 export function clockStatus() {

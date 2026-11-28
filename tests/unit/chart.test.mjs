@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { linePaths, yScale } from "../../js/chart.js";
+import { linePaths, yScale, closeFor } from "../../js/chart.js";
 
 const ident = (v) => v;
 
@@ -28,4 +28,11 @@ test("a flat day doesn't divide by zero", () => {
   const y = yScale([[0, 50], [1, 50]], 50, 0, 100);
   assert.ok(Number.isFinite(y(50)));
   assert.ok(Math.abs(y(50) - 50) < 1e-9, "flat line sits in the middle");
+});
+
+test("a day's chart is measured against that day's own previous close", () => {
+  const tue = Date.UTC(2026, 10, 24, 21, 0) / 1000, wed = Date.UTC(2026, 10, 25, 16, 0) / 1000;
+  assert.equal(closeFor({ day: "2026-11-24", pc: 195 }, { pc: 198, t: tue }), 195, "recorded with the day");
+  assert.equal(closeFor({ day: "2026-11-25", pc: null }, { pc: 198, t: wed }), 198, "the quote is from that day");
+  assert.equal(closeFor({ day: "2026-11-24", pc: null }, { pc: 198, t: wed }), null, "the quote is a later day's: unknown");
 });

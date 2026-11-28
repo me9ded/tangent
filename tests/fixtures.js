@@ -6,6 +6,11 @@ const KEY = "test-key-123";
 const NOW_S = () => Math.floor(Date.now() / 1000);
 /** Milliseconds for a New York wall-clock time on Wed Nov 25 2026 (EST, UTC−5). */
 const nyWed = (h, m) => Date.UTC(2026, 10, 25, h + 5, m);
+/** The page's clock starts here in every test (and runs normally from there), so "today" is always
+    Wednesday Nov 25 2026 at 11:00 AM in New York, whenever the tests run. */
+const NOW = nyWed(11, 0);
+/** Quote time for a stale quote: the previous session's close, Tue Nov 24 2026 4:00 PM New York. */
+const TUE_CLOSE = Date.parse("2026-11-24T21:00:00Z") / 1000;
 
 const QUOTES = {
   AAPL: { c: 200, d: 2, dp: 1.0101, h: 205, l: 195, o: 197, pc: 198 },
@@ -38,9 +43,9 @@ function makeFinnhub() {
     rateLimit: false,
     down: false,
     quotes: JSON.parse(JSON.stringify(QUOTES)),
-    // Quote timestamps: a fixed after-hours moment (Tue Nov 24 2026, 5:30 PM New York), so nothing
-    // depends on when the tests run. Chart tests push trades with their own times.
-    quoteT: Date.parse("2026-11-24T22:30:00Z") / 1000,
+    // Quote time: a minute before the page's clock, so quotes are from today's session. Tests about
+    // older prices (or that want an empty chart) set TUE_CLOSE.
+    quoteT: nyWed(10, 59) / 1000,
     calls: []
   };
 }
@@ -110,6 +115,11 @@ function fakeSocketScript() {
   window.__fakeWS = hub;
 }
 
+/* Any Content Security Policy violation is logged, and the test fails (see the page fixture). */
+function cspScript() {
+  document.addEventListener("securitypolicyviolation", (e) => console.error("CSP violation: " + e.violatedDirective + " " + (e.blockedURI || "inline") + " " + (e.sourceFile || "") + ":" + (e.lineNumber || "")));
+}
+
 /* Seeds localStorage once per tab, so a reload keeps whatever the app saved. */
 function seedScript(seed) {
   if (sessionStorage.getItem("__seeded")) return;
@@ -119,18 +129,24 @@ function seedScript(seed) {
 }
 
 const test = base.test.extend({
-  // Override per test with test.use({ seed: {...} }).
+  // Override per test with test.use({ seed: {...} }) or test.use({ now: ... }) (null: the real clock).
   seed: [{ fhkey: KEY, watch: SEED_WATCH }, { option: true }],
+  now: [NOW, { option: true }],
   finnhub: async ({ context }, use) => {
     const fh = makeFinnhub();
     await routeFinnhub(context, fh);
     await use(fh);
   },
-  page: async ({ page, seed, finnhub }, use) => {
+  page: async ({ page, seed, now, finnhub }, use) => {
     void finnhub;
+    const violations = [];
+    page.on("console", (m) => { if (/CSP violation|Content Security Policy/i.test(m.text())) violations.push(m.text()); });
+    if (now != null) await page.clock.install({ time: now });
+    await page.addInitScript(cspScript);
     await page.addInitScript(fakeSocketScript);
     await page.addInitScript(seedScript, seed);
     await use(page);
+    base.expect(violations, "Content Security Policy violations").toEqual([]);
   }
 });
 
@@ -141,4 +157,12 @@ async function openApp(page) {
   await base.expect(page.locator('#wl .px[data-px="AAPL"]')).toHaveText("$200.00");
 }
 
-module.exports = { test, expect: base.expect, openApp, nyWed, KEY, QUOTES, SEED_WATCH };
+/** Pushes one trade a minute for a stock, rising by 0.25 a minute, in separate frames like the real stream. */
+async function pushMinutes(page, sym, count, startMin = 0, from = 199, hour = 10) {
+  const trades = [];
+  for (let i = 0; i < count; i++) trades.push({ s: sym, p: from + i * 0.25, t: nyWed(hour, startMin + i) });
+  await base.expect.poll(() => page.evaluate(() => !!(window.__fakeWS.open() && window.__fakeWS.subs.size))).toBe(true);
+  for (const t of trades) await page.evaluate((t) => window.__fakeWS.push([t]), t);
+}
+
+module.exports = { test, expect: base.expect, openApp, pushMinutes, nyWed, NOW, TUE_CLOSE, KEY, QUOTES, SEED_WATCH, makeFinnhub, routeFinnhub, fakeSocketScript, seedScript };
