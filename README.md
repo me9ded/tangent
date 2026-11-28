@@ -49,7 +49,9 @@ Plain HTML, CSS and JavaScript. There's no build step.
 - `fonts/` holds Bricolage Grotesque, Literata and IBM Plex Mono, all under the SIL Open Font License.
 - `tests/` holds the end-to-end tests. They're not part of the app.
 
-When you change any file the service worker precaches, bump `VERSION` in `sw.js` so phones pick up the new version.
+## Deploys
+
+Every push to `main` runs the tests and, if they pass, deploys to GitHub Pages. CI builds the site with `tests/build-site.js`, which copies only the app's files and stamps the service worker's `VERSION` with the commit. The tests run against that exact build, and the same build is what gets deployed. Phones with Tangent open get a **Reload** prompt. In the repo, `VERSION` stays `tangent-dev`; don't change it by hand.
 
 ## Running tests
 

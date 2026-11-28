@@ -1,6 +1,7 @@
 /* Tangent service worker: keeps the app itself available offline and remembers company logos.
    Prices are never cached here; the app keeps the last prices it saw on its own. */
-const VERSION = "tangent-v5";
+// Deploys replace this with "tangent-<commit>" (tests/build-site.js), so every deploy is a new version.
+const VERSION = "tangent-dev";
 const LOGOS = "tangent-logos";
 const SHELL = [
   "./",
