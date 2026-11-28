@@ -1,4 +1,4 @@
-const { test, expect, openApp, pushMinutes, nyWed, TUE_CLOSE } = require("./fixtures");
+const { test, expect, openApp, settled, pushMinutes, nyWed, TUE_CLOSE } = require("./fixtures");
 
 /* Finnhub's quotes are still Tuesday's close, so the trades these tests push start Wednesday's
    recording from nothing (and are newer than the quote, so they move the price). */
@@ -34,7 +34,7 @@ test("live trades draw today's chart, and scrubbing it drives the headline", asy
   await expect(page.locator("#pg-px")).toHaveText("$201.75");
 
   // Scrub to the left edge: snaps to the first point, and the headline shows that moment.
-  await chart.hover(); // waits for the page to finish sliding in
+  await settled(page); // the page slides in
   const box = await chart.boundingBox();
   await page.mouse.move(box.x + 2, box.y + box.height / 2);
   await expect(page.locator("#pg-px")).toHaveText("$199.00");

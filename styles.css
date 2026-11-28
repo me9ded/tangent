@@ -527,6 +527,9 @@ body.dragging-row { cursor: grabbing; user-select: none; -webkit-user-select: no
 body.layered .toast { bottom: calc(var(--sb) + 18px); }
 .toast.has-act { display: flex; align-items: center; gap: 16px; padding-right: 8px; white-space: normal; }
 .toast.has-act #toast-msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Taps go through a toast to the list under it; only its button (Undo, Reload) catches them. */
+.toast { pointer-events: none; }
+#toast-act { pointer-events: auto; }
 #toast-act { flex: none; padding: 6px 12px; border: 0; border-radius: 999px; background: color-mix(in oklch, var(--bg) 18%, var(--ink)); color: var(--bg); font-weight: 650; font-size: 0.86rem; }
 @media (prefers-reduced-motion: no-preference) {
   .toast:not([hidden]) { animation: toast-in 0.2s ease; }

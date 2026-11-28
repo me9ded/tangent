@@ -1,14 +1,21 @@
-const { test, expect, openApp } = require("./fixtures");
+const { test, expect, openApp, settled } = require("./fixtures");
 
 const symbols = (page) => page.locator("#wl .wl-id b").allTextContents();
 const savedOrder = (page) => page.evaluate(() => JSON.parse(localStorage.getItem("tangent.watch")).map((w) => w.sym));
 const subs = (page) => page.evaluate(() => [...window.__fakeWS.subs]);
 const quoteCalls = (finnhub) => finnhub.calls.filter((c) => c.path === "/quote").length;
 
-/* Drags the mouse horizontally across a row, in steps like a finger. Hovering first waits until the
-   row has stopped sliding (rows animate into a new order). */
+/* Scrolls the list up to the top of the screen (clear of the autoscroll edge and the toast), once the
+   rows have stopped sliding into their order. */
+async function listToTop(page) {
+  await page.locator("#wl").evaluate((ul) => ul.scrollIntoView({ block: "start" }));
+  await settled(page);
+}
+
+/* Drags the mouse horizontally across a row, in steps like a finger, once the rows have stopped
+   sliding into their order. */
 async function swipe(page, li, dx) {
-  await li.hover();
+  await listToTop(page);
   const b = await li.boundingBox();
   const x = b.x + b.width - 40, y = b.y + b.height / 2;
   await page.mouse.move(x, y);
@@ -56,6 +63,7 @@ test("Moves order waits while a finger is on the list, so a tap opens what was u
   await openApp(page);
   expect(await symbols(page)).toEqual(["NVDA", "AAPL", "TSLA", "MSFT"]);
   await expect.poll(() => subs(page)).toContain("MSFT");
+  await settled(page);
   const b = await page.locator('#wl li[data-sym="AAPL"] .wl-id').boundingBox();
   await page.mouse.move(b.x + 10, b.y + b.height / 2);
   await page.mouse.down();
@@ -112,7 +120,7 @@ test.describe("swipe to remove", () => {
     const li = page.locator('#wl li[data-sym="AAPL"]');
     await swipe(page, li, 80);
     await expect(li).not.toHaveClass(/open/);
-    await li.hover();
+    await settled(page);
     const r = await li.boundingBox();
     await page.mouse.move(r.x + r.width - 40, r.y + 10);
     await page.mouse.down();
@@ -147,6 +155,14 @@ test("pull down on Home to refresh", async ({ page, finnhub, browserName }) => {
   expect(quoteCalls(finnhub)).toBe(after);
 });
 
+test("a toast without a button doesn't block the list under it", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() => window.__tangent.showToast("Hello there", 5000));
+  const toast = await page.locator("#toast").boundingBox();
+  const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y).closest("#toast"), [toast.x + 10, toast.y + toast.height / 2]);
+  expect(hit).toBeNull();
+});
+
 test.describe("reordering", () => {
   test("grips only show in Mine sort", async ({ page }) => {
     await openApp(page);
@@ -176,9 +192,7 @@ test.describe("reordering", () => {
   test("dragging a grip moves the stock", async ({ page }) => {
     await openApp(page);
     await page.locator('#sort [data-sort="mine"]').click();
-    // The rows slide into the new order first.
-    await page.locator('#wl li[data-sym="AAPL"] .wl-grip').hover();
-    await page.locator('#wl li[data-sym="NVDA"]').hover();
+    await listToTop(page);
     const grip = await page.locator('#wl li[data-sym="AAPL"] .wl-grip').boundingBox();
     const target = await page.locator('#wl li[data-sym="NVDA"]').boundingBox();
     await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);

@@ -127,4 +127,4 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
 }
 
 // Hooks for automated tests; harmless in normal use.
-window.__tangent = { quotes, live, fhQ, hist, S, watch: () => S.watch, openPage, showTab, refreshAll, connectKey, mstatus: () => S.mstatus, isLive };
+window.__tangent = { quotes, live, fhQ, hist, S, watch: () => S.watch, openPage, showTab, showToast, refreshAll, connectKey, mstatus: () => S.mstatus, isLive };

@@ -157,6 +157,15 @@ async function openApp(page) {
   await base.expect(page.locator('#wl .px[data-px="AAPL"]')).toHaveText("$200.00");
 }
 
+/** Waits until nothing is sliding (rows moving into a new order, a page sliding in). Playwright's own
+    "stable" check can pass before an animation's first frame, which is too early to measure a row. */
+async function settled(page) {
+  await page.waitForFunction(() => document.getAnimations().every((a) => {
+    const t = a.effect && a.effect.getComputedTiming();
+    return a.playState !== "running" || !t || t.endTime === Infinity;
+  }));
+}
+
 /** Pushes one trade a minute for a stock, rising by 0.25 a minute, in separate frames like the real stream. */
 async function pushMinutes(page, sym, count, startMin = 0, from = 199, hour = 10) {
   const trades = [];
@@ -165,4 +174,4 @@ async function pushMinutes(page, sym, count, startMin = 0, from = 199, hour = 10
   for (const t of trades) await page.evaluate((t) => window.__fakeWS.push([t]), t);
 }
 
-module.exports = { test, expect: base.expect, openApp, pushMinutes, nyWed, NOW, TUE_CLOSE, KEY, QUOTES, SEED_WATCH, makeFinnhub, routeFinnhub, fakeSocketScript, seedScript };
+module.exports = { test, expect: base.expect, openApp, settled, pushMinutes, nyWed, NOW, TUE_CLOSE, KEY, QUOTES, SEED_WATCH, makeFinnhub, routeFinnhub, fakeSocketScript, seedScript };
