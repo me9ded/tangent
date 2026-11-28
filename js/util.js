@@ -19,7 +19,7 @@ export const signedUsd = (v) => (Number.isFinite(v) ? (v > 0 ? "+" : v < 0 ? "âˆ
 export const clock = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 export function cleanName(s) {
-  s = String(s || "").replace(/\b(inc|corp|corporation|ltd|limited|plc|co|holdings?|group|class [a-c]|cl [a-c]|sa|nv|ag|adr|spons?|sponsored|ord|shs|common stock)\b\.?/gi, "").replace(/[-,/]+\s*$/, "").replace(/\s+/g, " ").trim();
+  s = String(s || "").replace(/\b(inc|corp|corporation|ltd|limited|plc|co|holdings?|group|class [a-c]|cl [a-c]|sa|nv|ag|adr|sp|spons?|sponsored|ord|shs|common stock)\b\.?/gi, "").replace(/[-,/]+\s*$/, "").replace(/\s+/g, " ").trim();
   return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) || s;
 }
 export const initials = (name) => String(name || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]).join("").toUpperCase() || "?";

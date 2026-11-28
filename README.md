@@ -41,9 +41,9 @@ Prices can lag a little. Tangent isn't investment advice.
 
 ## Files
 
-Plain HTML, CSS and JavaScript. There's no build step.
+Plain HTML, CSS and JavaScript modules. There's no build step.
 
-- `index.html`, `styles.css`, `app.js` are the app.
+- `index.html` and `styles.css` are the page; `js/` holds the app as ES modules. `js/main.js` wires everything up, and the other modules only define things, so the unit tests can import them without a browser.
 - `sw.js` is the service worker that keeps it working offline.
 - `manifest.webmanifest` and `icons/` make it installable.
 - `fonts/` holds Bricolage Grotesque, Literata and IBM Plex Mono, all under the SIL Open Font License.
@@ -61,8 +61,9 @@ The tests drive the real app in Android Chrome and iPhone Safari engines against
 cd tests
 npm ci
 npx playwright install chromium webkit
-npm test                 # all tests
-npm run check-shell      # every file sw.js precaches exists
+npm run unit             # unit tests for the pure logic (Node only, no browser)
+npm test                 # end-to-end tests
+npm run check-shell      # sw.js precaches every file and module, and nothing missing
 SHOTS=/some/folder npx playwright test theme --grep shots   # save light and dark screenshots
 ```
 

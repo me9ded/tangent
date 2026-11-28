@@ -21,6 +21,7 @@ jobs:
           cache-dependency-path: tests/package-lock.json
       - run: npm ci
       - run: npm run check-shell
+      - run: npm run unit
       # Build the site exactly as it will be deployed, version stamp included, and test that.
       - run: node build-site.js ../_site "tangent-${GITHUB_SHA::7}"
       - run: npx playwright install --with-deps chromium webkit

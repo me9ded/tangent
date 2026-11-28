@@ -4,6 +4,7 @@
   "description": "End-to-end tests for Tangent. The app itself has no build step and no dependencies.",
   "scripts": {
     "test": "playwright test",
+    "unit": "node --test \"unit/*.test.mjs\"",
     "check-shell": "node check-shell.js",
     "build-site": "node build-site.js"
   },
